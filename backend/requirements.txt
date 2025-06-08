@@ -1,6 +1,8 @@
-fastapi>=0.100.0
-uvicorn[standard]>=0.20.0
-pydantic>=2.0.0
-structlog>=23.0.0
-python-dotenv>=1.0.0
-# pytest # 用於測試，實際執行時可能由 pytest 命令直接調用
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+aiogoogle
+aiosqlite
+fastapi
+uvicorn[standard]
+APScheduler

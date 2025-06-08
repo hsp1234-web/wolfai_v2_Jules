@@ -180,45 +180,54 @@ if __name__ == '__main__':
 
     async def main():
         # Make sure aiosqlite connection uses row_factory for dict-like rows if needed by default
-        # For this code, conversion is done manually after fetching.
-        # import aiosqlite
-        # aiosqlite.Row.keys() and indexing row[key] works out of the box.
+        # 在此代碼中，欄位到字典的轉換是在獲取數據後手動完成的。
+        # aiosqlite.Row 本身支援透過 .keys() 和索引 (如 row[key]) 進行類似字典的操作。
 
         dal = DataAccessLayer(reports_db_path=test_reports_db, prompts_db_path=test_prompts_db)
 
-        logger.info("---- 測試 DataAccessLayer ----")
-        await dal.initialize_databases()
+        logger.info("---- 開始 DataAccessLayer 功能測試 ----")
+        await dal.initialize_databases() # 初始化資料庫和表結構
 
-        logger.info("\n---- 測試報告功能 ----")
-        report_id1 = await dal.insert_report_data("週報_2025_W23.docx", "這是第一份週報的內容。", "/wolf_in/週報_2025_W23.docx", {"author": "張三"})
-        report_id2 = await dal.insert_report_data("月度總結.pdf", None, "/wolf_in/月度總結.pdf", {"department": "技術部"})
+        logger.info("\n---- 測試「報告」相關功能 ----")
+        report_id1 = await dal.insert_report_data("公司週報_2025_第23週.docx", "這是第一份提交的公司內部週報內容。", "/drive/wolf_in/公司週報_2025_第23週.docx", {"author": "王明", "version": "1.0"})
+        report_id2 = await dal.insert_report_data("產品月度總結報告.pdf", None, "/drive/wolf_in/產品月度總結報告.pdf", {"department": "產品部", "status": "draft"}) # 假設 content 為空，待後續處理
 
         if report_id1:
             retrieved_report1 = await dal.get_report_by_id(report_id1)
-            logger.info(f"獲取的報告 ID {report_id1}: {retrieved_report1}")
+            logger.info(f"已獲取報告 ID {report_id1} 的詳細資料: {retrieved_report1}")
 
         if report_id2:
-            await dal.update_report_status(report_id2, "processed", "這是處理後的月度總結內容。")
+            await dal.update_report_status(report_id2, "已處理", "這是經過 AI 分析和總結後的產品月度總結報告內容。")
             retrieved_report2 = await dal.get_report_by_id(report_id2)
-            logger.info(f"更新並獲取的報告 ID {report_id2}: {retrieved_report2}")
+            logger.info(f"已更新並重新獲取報告 ID {report_id2} 的詳細資料: {retrieved_report2}")
 
-        all_reports = await dal.get_all_reports()
-        logger.info(f"所有報告 (部分欄位): {all_reports}")
+        all_reports = await dal.get_all_reports(limit=5) # 獲取最新的5條報告
+        logger.info(f"資料庫中所有報告 (部分欄位，最多5條): {all_reports}")
 
-        logger.info("\n---- 測試提示詞範本功能 ----")
-        prompt_id1 = await dal.insert_prompt_template("週報總結助理", "請幫我總結這份週報的主要內容、已完成任務和遇到的問題。", "週報分析")
-        prompt_id2 = await dal.insert_prompt_template("提取關鍵資訊", "從以下文字中提取關鍵的日期、人物和事件：\n{text_input}", "通用提取")
+        logger.info("\n---- 測試「提示詞範本」相關功能 ----")
+        prompt_id1 = await dal.insert_prompt_template("標準週報總結助理", "請根據以下週報內容，幫我總結本週的主要工作成果、已完成的任務以及遇到的主要挑戰和問題。", "週報分析")
+        prompt_id2 = await dal.insert_prompt_template("關鍵資訊提取器", "請從以下提供的文字中，提取所有關鍵的日期、涉及的人物、重要的事件以及相關的地點：\n{text_input}", "通用資訊提取")
 
         if prompt_id1:
-            retrieved_prompt1 = await dal.get_prompt_template_by_name("週報總結助理")
-            logger.info(f"獲取的提示詞範本 '週報總結助理': {retrieved_prompt1}")
+            retrieved_prompt1 = await dal.get_prompt_template_by_name("標準週報總結助理")
+            logger.info(f"已獲取的提示詞範本 '標準週報總結助理': {retrieved_prompt1}")
 
-        all_prompts = await dal.get_all_prompt_templates()
-        logger.info(f"所有提示詞範本 (部分欄位): {all_prompts}")
+        if prompt_id2: # 簡單測試一下第二個提示詞是否存在
+             if not await dal.get_prompt_template_by_name("關鍵資訊提取器"):
+                 logger.error("錯誤：未能成功獲取 '關鍵資訊提取器' 範本。")
 
-        logger.info(f"測試資料庫檔案位於: {data_dir}")
 
-    if os.name == 'nt':
+        all_prompts = await dal.get_all_prompt_templates(limit=5) # 獲取最新的5條提示詞範本
+        logger.info(f"資料庫中所有提示詞範本 (部分欄位，最多5條): {all_prompts}")
+
+        logger.info(f"\n測試完畢。測試用的資料庫檔案位於目錄: {data_dir}")
+        logger.info(f"  - 報告資料庫: {test_reports_db}")
+        logger.info(f"  - 提示詞資料庫: {test_prompts_db}")
+        logger.info("您可以手動檢查這些 SQLite 檔案以驗證測試結果。")
+
+
+    # 如果在 Windows 環境下執行 asyncio，設定事件迴圈策略以避免常見問題
+    if os.name == 'nt': # 'nt' 表示 Windows NT 作業系統
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     asyncio.run(main())
