@@ -13,6 +13,7 @@ import MenuItem from '@mui/material/MenuItem';
 import CircularProgress from '@mui/material/CircularProgress';
 import Box from '@mui/material/Box';
 import Alert from '@mui/material/Alert';
+import { useOperationMode } from '../contexts/OperationModeContext'; // 導入用於獲取操作模式狀態的 Hook
 
 interface ApiKeyStatus {
   is_set: boolean;
@@ -21,6 +22,9 @@ interface ApiKeyStatus {
 }
 
 const SettingsCard: React.FC = () => {
+  // 從 OperationModeContext 獲取當前操作模式 (mode) 和模式加載狀態 (isLoadingMode)。
+  // 這將決定是否顯示以及如何顯示 Google Drive 相關的設定狀態。
+  const { mode, isLoadingMode } = useOperationMode();
   // API 金鑰狀態
   const [apiKeyInput, setApiKeyInput] = useState<string>('');
   const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus | null>(null);
@@ -157,18 +161,30 @@ const SettingsCard: React.FC = () => {
               </Button>
             </>
           )}
-          {/* 顯示 Google Drive 服務帳號的狀態 */}
-          { !isKeyLoading && apiKeyStatus && ( // 金鑰狀態加載完成後顯示
+          {/* 根據操作模式條件化顯示 Google Drive 服務帳號的狀態 */}
+          {/* 步驟 1: 檢查操作模式是否仍在加載 */}
+          {isLoadingMode ? (
+            // 若正在加載操作模式，顯示進度指示器
+            <Box sx={{ display: 'flex', justifyContent: 'center', my: 1 }}><CircularProgress size={24} /></Box>
+          ) : mode === 'transient' ? (
+            // 步驟 2: 若為「暫存模式」，則顯示 Drive 功能已停用的提示
+            <Alert severity="info" sx={{ mt: 1 }}>
+              目前為暫存模式，Google Drive 相關功能（如自動讀取週報、資料持久化）已停用。
+            </Alert>
+          ) : mode === 'persistent' && !isKeyLoading && apiKeyStatus ? (
+            // 步驟 3: 若為「持久模式」，並且 API 金鑰狀態 (isKeyLoading, apiKeyStatus) 也已加載完成
+            // 則根據 apiKeyStatus.drive_service_account_loaded 的值顯示 Drive 服務帳號的具體狀態
             apiKeyStatus.drive_service_account_loaded ? (
-              <Alert severity="info" sx={{ mt: 1 }}>Google Drive 服務帳號已從後端正確加載並初始化成功。</Alert>
+              <Alert severity="info" sx={{ mt: 1 }}>持久模式：Google Drive 服務帳號已從後端正確加載並初始化成功。</Alert>
             ) : (
               <Alert severity="warning" sx={{ mt: 1 }}>
-                Google Drive 服務帳號未從後端環境變數加載或初始化失敗。
+                持久模式：Google Drive 服務帳號未從後端環境變數加載或初始化失敗。
                 如果您剛才貼上的是服務帳號 JSON 內容且設定成功，此狀態應已更新。
                 否則，部分 Google Drive 相關功能 (如自動讀取週報) 可能會受限。
               </Alert>
             )
-          )}
+          ) : null } {/* 其他情況 (例如 mode 為 null 但 isLoadingMode 為 false，或 isKeyLoading 為 true 但 isLoadingMode 為 false) 不顯示此區塊 */}
+
            {/* 如果金鑰本身已設定，但獲取狀態的過程中有其他非致命錯誤，也提示用戶 */}
            {keyError && apiKeyStatus?.is_set && (
              <Alert severity="warning" sx={{ mt:1 }}>金鑰狀態資訊可能不完整: {keyError}</Alert>

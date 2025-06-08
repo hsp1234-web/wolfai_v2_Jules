@@ -16,7 +16,7 @@ class DataAccessLayer:
         """
         self.reports_db_path = reports_db_path
         self.prompts_db_path = prompts_db_path
-        logger.info(f"DataAccessLayer initialized with reports_db: '{reports_db_path}', prompts_db: '{prompts_db_path}'")
+        logger.info(f"DataAccessLayer configured to use Reports DB at: '{self.reports_db_path}' and Prompts DB at: '{self.prompts_db_path}'.")
 
     async def _execute_query(self, db_path: str, query: str, params: tuple = (), fetch_one=False, fetch_all=False, commit=False):
         """

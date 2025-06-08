@@ -41,6 +41,7 @@ class HealthCheckResponse(BaseModel):
     scheduler_status: str = "Not initialized"
     drive_service_status: str = "Not initialized" # Updated field name
     config_status: str = "檢查中..." # 新增欄位，用於更詳細的配置狀態
+    mode: str # 新增欄位: 當前操作模式 (例如 "transient" 或 "persistent")
 
 class ApiKeyStatusResponse(BaseModel):
     is_set: bool
@@ -59,6 +60,14 @@ def get_env_or_default(var_name: str, default: str) -> str:
 @app.on_event("startup")
 async def startup_event():
     logger.info("後端應用程式啟動中...")
+
+    # 0. 讀取操作模式 (由 Colab 筆記本設定的環境變數)
+    # OPERATION_MODE 環境變數決定了應用程式是否應嘗試使用 Google Drive 進行資料持久化。
+    # "persistent" (持久模式): 啟用 Google Drive 整合，資料將儲存於使用者的 Drive。
+    # "transient" (暫存模式): 禁用 Google Drive 整合，資料僅儲存在當前會話，結束後遺失。預設為 transient。
+    operation_mode = os.getenv("OPERATION_MODE", "transient")
+    logger.info(f"偵測到操作模式: {operation_mode}")
+    app_state["operation_mode"] = operation_mode # 將操作模式存儲於應用程式狀態中，供其他部分使用
 
     # 1. 加載環境變數和配置
     env_api_key = os.getenv("COLAB_GOOGLE_API_KEY")
@@ -128,94 +137,106 @@ async def startup_event():
     logger.info(f"報告資料庫路徑設定為: {app_state['reports_db_path']}")
     logger.info(f"提示詞資料庫路徑設定為: {app_state['prompts_db_path']}")
 
-    # 2. 初始化服務
-    # 只有在服務帳號憑證存在時才嘗試初始化 GoogleDriveService
-    if not app_state["critical_config_missing_sa_credentials"]:
-        if app_state.get("service_account_info"): # 確保 service_account_info 真的有內容
-            try:
-                app_state["drive_service"] = GoogleDriveService(
-                    service_account_info=app_state.get("service_account_info")
-                )
-                logger.info("GoogleDriveService 已成功初始化。")
-                app_state["drive_service_status"] = "已初始化" # 中文狀態
-            except ValueError as e: # 無效憑證引發的錯誤
-                logger.error(f"GoogleDriveService 初始化失敗 (ValueError): {e}。Google Drive 功能將不可用。")
-                app_state["drive_service"] = None
-                app_state["drive_service_status"] = f"初始化錯誤：無效的憑證 ({e})"
-            except FileNotFoundError as e: # GDS 可能因憑證檔案路徑問題拋出此錯誤
-                 logger.error(f"GoogleDriveService 初始化失敗 (FileNotFoundError): {e}。Google Drive 功能將不可用。")
-                 app_state["drive_service"] = None
-                 app_state["drive_service_status"] = f"初始化錯誤：找不到憑證檔案 ({e})"
-            except Exception as e: # 其他未預期錯誤
-                logger.error(f"GoogleDriveService 初始化時發生未預期錯誤: {e}", exc_info=True)
-                app_state["drive_service"] = None
-                # 保持錯誤訊息簡短，避免過長狀態
-                app_state["drive_service_status"] = f"未預期的初始化錯誤: {str(e)[:100]}"
-        else:
-            # 理論上，如果 critical_config_missing_sa_credentials 為 False，service_account_info 應該存在。
-            # 但為防萬一，添加此日誌。
-            logger.warning("服務帳號資訊為空，即使未標記為嚴重憑證缺失。GoogleDriveService 未初始化。")
-            app_state["drive_service"] = None
-            app_state["drive_service_status"] = "未初始化 (服務帳號資訊為空)" # 中文狀態
-    else:
-        # 此處無需重複記錄 critical_config_missing_sa_credentials 的日誌，因為前面已經記錄過
-        # drive_service_status 也已在前面設定為 "錯誤：服務帳號憑證未設定"
-        logger.warning("由於 Google 服務帳號憑證缺失，GoogleDriveService 未初始化。")
-        app_state["drive_service"] = None
-        # 此處不應覆蓋 drive_service_status，它已由前面的邏輯設定為更具體的錯誤訊息
-
+    # 2. 初始化服務 (DataAccessLayer 在所有模式下都初始化)
     app_state["dal"] = DataAccessLayer(
         reports_db_path=app_state["reports_db_path"],
         prompts_db_path=app_state["prompts_db_path"]
     )
-    await app_state["dal"].initialize_databases() # DAL 初始化應盡可能執行
+    await app_state["dal"].initialize_databases() # DAL 初始化應在兩種模式下都執行
     logger.info("DataAccessLayer 已初始化並檢查/創建了資料庫表。")
 
-    # ReportIngestionService 的初始化依賴於 DriveService 和 DAL
-    if app_state.get("drive_service") and app_state.get("dal"):
-        app_state["report_ingestion_service"] = ReportIngestionService(
-            drive_service=app_state["drive_service"],
-            dal=app_state["dal"]
-        )
-        logger.info("ReportIngestionService 已初始化。")
-    else:
-        missing_deps = []
-        if not app_state.get("drive_service"):
-            missing_deps.append("GoogleDriveService")
-        if not app_state.get("dal"):
-            missing_deps.append("DataAccessLayer")
-        logger.warning(f"由於 { ' 和 '.join(missing_deps) } 未成功初始化，ReportIngestionService 未初始化。")
-        app_state["report_ingestion_service"] = None
+    # 根據操作模式，決定是否初始化 Google Drive 相關的服務 (GoogleDriveService, ReportIngestionService, APScheduler)
+    if operation_mode == "persistent":
+        # 持久模式下，應用程式將嘗試連接 Google Drive 並啟用所有相關功能。
+        logger.info("持久模式：嘗試初始化 Google Drive 相關服務...")
 
-
-    # 3. 初始化並啟動排程器
-    scheduler_interval_minutes = int(get_env_or_default("SCHEDULER_INTERVAL_MINUTES", "15"))
-    # WOLF_IN_FOLDER_ID 和 WOLF_PROCESSED_FOLDER_ID 已在前面透過 _env 變數獲取並檢查
-    # 此處直接使用 app_state 中的標記來判斷是否配置完整
-
-    if app_state.get("report_ingestion_service"):
-        if not app_state["critical_config_missing_drive_folders"]: # 僅在 Drive Folder ID 配置完整時嘗試啟動排程器
-            scheduler = AsyncIOScheduler(timezone="UTC") # 建議使用 UTC 時區以避免混淆
-            scheduler.add_job(
-                trigger_report_ingestion_task,
-                trigger=IntervalTrigger(minutes=scheduler_interval_minutes), # 使用 IntervalTrigger
-                args=[app_state["report_ingestion_service"]],
-                id="report_ingestion_job",
-                name="定期從 Google Drive 擷取報告", # 中文任務名稱
-                replace_existing=True
-            )
-            try:
-                scheduler.start()
-                app_state["scheduler"] = scheduler
-                logger.info(f"APScheduler 排程器已啟動，每隔 {scheduler_interval_minutes} 分鐘執行一次報告擷取任務。")
-            except Exception as e:
-                logger.error(f"APScheduler 排程器啟動失敗: {e}", exc_info=True)
-                app_state["scheduler"] = None # 確保啟動失敗時 scheduler 為 None
+        # GoogleDriveService 初始化:
+        # 僅在持久模式下，並且成功加載了 Google 服務帳號憑證 (來自環境變數) 時進行。
+        if not app_state["critical_config_missing_sa_credentials"]:
+            if app_state.get("service_account_info"):
+                try:
+                    app_state["drive_service"] = GoogleDriveService(
+                        service_account_info=app_state.get("service_account_info")
+                    )
+                    logger.info("GoogleDriveService 已成功初始化 (持久模式)。")
+                    app_state["drive_service_status"] = "已初始化 (持久模式)"
+                except ValueError as e:
+                    logger.error(f"GoogleDriveService 初始化失敗 (ValueError): {e}。Google Drive 功能將不可用 (持久模式)。")
+                    app_state["drive_service"] = None
+                    app_state["drive_service_status"] = f"初始化錯誤 (持久模式)：無效的憑證 ({e})"
+                except FileNotFoundError as e:
+                     logger.error(f"GoogleDriveService 初始化失敗 (FileNotFoundError): {e}。Google Drive 功能將不可用 (持久模式)。")
+                     app_state["drive_service"] = None
+                     app_state["drive_service_status"] = f"初始化錯誤 (持久模式)：找不到憑證檔案 ({e})"
+                except Exception as e:
+                    logger.error(f"GoogleDriveService 初始化時發生未預期錯誤: {e} (持久模式)", exc_info=True)
+                    app_state["drive_service"] = None
+                    app_state["drive_service_status"] = f"未預期的初始化錯誤 (持久模式): {str(e)[:100]}"
+            else:
+                logger.warning("服務帳號資訊為空，即使未標記為嚴重憑證缺失。GoogleDriveService 未初始化 (持久模式)。")
+                app_state["drive_service"] = None
+                app_state["drive_service_status"] = "未初始化 (持久模式，服務帳號資訊為空)"
         else:
-            logger.warning("排程器未啟動：由於 Google Drive 資料夾 ID (WOLF_IN_FOLDER_ID 或 WOLF_PROCESSED_FOLDER_ID) 未完整設定。")
+            logger.warning("由於 Google 服務帳號憑證缺失，GoogleDriveService 未初始化 (持久模式)。")
+            app_state["drive_service"] = None
+            # drive_service_status 已在前面憑證檢查部分設定過 (例如 "錯誤：服務帳號憑證未設定")
+
+        # ReportIngestionService 初始化:
+        # 僅在持久模式下，並且 GoogleDriveService 和 DataAccessLayer 都已成功初始化時進行。
+        if app_state.get("drive_service") and app_state.get("dal"):
+            app_state["report_ingestion_service"] = ReportIngestionService(
+                drive_service=app_state["drive_service"],
+                dal=app_state["dal"]
+            )
+            logger.info("ReportIngestionService 已初始化 (持久模式)。")
+        else:
+            missing_deps_ingestion = []
+            if not app_state.get("drive_service"): missing_deps_ingestion.append("GoogleDriveService")
+            if not app_state.get("dal"): missing_deps_ingestion.append("DataAccessLayer")
+            logger.warning(f"由於 { ' 和 '.join(missing_deps_ingestion) } 未成功初始化，ReportIngestionService 未初始化 (持久模式)。")
+            app_state["report_ingestion_service"] = None
+
+        # APScheduler (排程器) 初始化與啟動:
+        # 僅在持久模式下，ReportIngestionService 已初始化，且必要的 Drive Folder ID 已設定時進行。
+        # 排程器負責定期觸發報告擷取任務。
+        if app_state.get("report_ingestion_service"):
+            if not app_state["critical_config_missing_drive_folders"]: # 檢查 Drive Folder ID 是否已設定
+                scheduler_interval_minutes = int(get_env_or_default("SCHEDULER_INTERVAL_MINUTES", "15"))
+                scheduler = AsyncIOScheduler(timezone="UTC") # 使用 UTC 以避免時區問題
+                scheduler.add_job(
+                    trigger_report_ingestion_task,
+                    trigger=IntervalTrigger(minutes=scheduler_interval_minutes),
+                    args=[app_state["report_ingestion_service"]],
+                    id="report_ingestion_job",
+                    name="定期從 Google Drive 擷取報告 (持久模式)",
+                    replace_existing=True
+                )
+                try:
+                    scheduler.start()
+                    app_state["scheduler"] = scheduler
+                    logger.info(f"APScheduler 排程器已啟動 (持久模式)，每隔 {scheduler_interval_minutes} 分鐘執行一次報告擷取任務。")
+                except Exception as e:
+                    logger.error(f"APScheduler 排程器啟動失敗: {e} (持久模式)", exc_info=True)
+                    app_state["scheduler"] = None
+            else:
+                logger.warning("排程器未啟動 (持久模式)：由於 Google Drive 資料夾 ID 未完整設定。")
+                app_state["scheduler"] = None
+        else:
+            logger.warning("排程器未啟動 (持久模式)：由於 ReportIngestionService 未初始化。")
+                    app_state["scheduler"] = None # 確保啟動失敗時 scheduler 為 None
+            else:
+                logger.warning("排程器未啟動 (持久模式)：由於 Google Drive 資料夾 ID (WOLF_IN_FOLDER_ID 或 WOLF_PROCESSED_FOLDER_ID) 未完整設定。")
+                app_state["scheduler"] = None
+        else:
+            logger.warning("排程器未啟動 (持久模式)：由於 ReportIngestionService 未初始化。")
             app_state["scheduler"] = None
-    else:
-        logger.warning("排程器未啟動：由於 ReportIngestionService 未初始化。")
+    else: # transient mode (暫存模式)
+        # 在暫存模式下，所有與 Google Drive 持久化相關的服務都不會被初始化。
+        # 資料庫將使用本地臨時路徑 (由 run_in_colab.ipynb 設定)。
+        logger.info("暫存模式：跳過 GoogleDriveService, ReportIngestionService, 和 APScheduler 的初始化。")
+        app_state["drive_service"] = None
+        app_state["drive_service_status"] = "暫存模式下未啟用" # 明確指出 Drive 服務在暫存模式下的狀態
+        app_state["report_ingestion_service"] = None
         app_state["scheduler"] = None
 
     logger.info("後端應用程式啟動流程完成。")
@@ -233,25 +254,32 @@ async def shutdown_event():
 @app.get("/api/health", response_model=HealthCheckResponse, tags=["General"])
 async def health_check():
     scheduler = app_state.get("scheduler")
-    scheduler_status_msg = "未設定或未執行" # Default Chinese message
-    if scheduler: # 排程器實例存在
-        if scheduler.running:
-            job = scheduler.get_job("report_ingestion_job")
-            if job:
-                scheduler_status_msg = f"執行中 (下次執行時間: {job.next_run_time})"
+    # 從 app_state 獲取在啟動時設定的操作模式，預設為 "未知" 以處理可能的邊界情況。
+    operation_mode = app_state.get("operation_mode", "未知")
+
+    # 根據操作模式和排程器狀態決定 scheduler_status_msg。
+    scheduler_status_msg = f"未設定或未執行 (模式: {operation_mode})"
+    if operation_mode == "persistent":
+        if scheduler:
+            if scheduler.running:
+                job = scheduler.get_job("report_ingestion_job")
+                if job:
+                    scheduler_status_msg = f"執行中 (模式: persistent, 下次執行: {job.next_run_time})"
+                else:
+                    scheduler_status_msg = "執行中 (模式: persistent, 任務 'report_ingestion_job' 未找到)"
             else:
-                scheduler_status_msg = "執行中 (任務 'report_ingestion_job' 未找到)" # Chinese message
-        else: # 排程器實例存在但未執行 (例如啟動失敗)
-            scheduler_status_msg = "已配置但啟動失敗或已關閉" # Chinese message
-    # 如果 ReportIngestionService 初始化了，且 Drive Folder ID 也設定了，但排程器卻是 None，說明排程器啟動失敗
-    elif app_state.get("report_ingestion_service") and \
-         not app_state.get("critical_config_missing_drive_folders"):
-        scheduler_status_msg = "已配置但啟動失敗 (排程器實例為空)" # Chinese message
-    elif app_state.get("critical_config_missing_drive_folders"):
-        scheduler_status_msg = "未啟動 (Google Drive 資料夾 ID 未完整設定)" # Chinese message
+                scheduler_status_msg = "已配置但啟動失敗或已關閉 (模式: persistent)"
+        elif app_state.get("report_ingestion_service") and not app_state.get("critical_config_missing_drive_folders"):
+            scheduler_status_msg = "已配置但啟動失敗 (模式: persistent, 排程器實例為空)"
+        elif app_state.get("critical_config_missing_drive_folders"):
+            scheduler_status_msg = "未啟動 (模式: persistent, Google Drive 資料夾 ID 未完整設定)"
+        else: # 其他持久模式下排程器未啟動的情況
+             scheduler_status_msg = f"未啟動 (模式: persistent, ReportIngestionService 未初始化或未知原因)"
+    else: # transient mode
+        scheduler_status_msg = f"暫存模式下未啟用"
 
 
-    current_drive_status = app_state.get("drive_service_status", "未知狀態") # Default Chinese status
+    current_drive_status = app_state.get("drive_service_status", f"未知狀態 (模式: {operation_mode})")
     # 如果 service_account_info 存在但 drive_service 為 None，說明初始化失敗。
     # current_drive_status 應已在啟動時設定了具體的錯誤訊息。
     # 如果 drive_service 成功初始化，current_drive_status 會是 "已初始化"。
@@ -280,129 +308,148 @@ async def health_check():
     else:
         final_config_status = " | ".join(config_messages)
 
+    # 從 app_state 獲取當前操作模式，用於包含在回應中。
+    current_operation_mode = app_state.get("operation_mode", "transient") # 預設為 "transient" 以防萬一
+
     return HealthCheckResponse(
         scheduler_status=scheduler_status_msg,
-        drive_service_status=current_drive_status, # 這直接反映 GDrive 服務的狀態
-        config_status=final_config_status
+        drive_service_status=current_drive_status,
+        config_status=final_config_status,
+        mode=current_operation_mode # 在回應中明確包含當前操作模式
     )
 
-@app.get("/api/get_api_key_status", response_model=ApiKeyStatusResponse, tags=["設定"]) # "設定" tag
+@app.get("/api/get_api_key_status", response_model=ApiKeyStatusResponse, tags=["設定"])
 async def get_api_key_status():
     is_set = bool(app_state.get("google_api_key"))
     source = app_state.get("google_api_key_source")
-    # drive_sa_loaded reflects if service_account_info is present in app_state
-    drive_sa_loaded = bool(app_state.get("service_account_info"))
-    # For a more accurate status of Drive functionality, one might check app_state["drive_service"] is not None
-    # drive_functional = app_state.get("drive_service") is not None # 舊的註解，可以移除
-    api_key_is_set = bool(app_state.get("google_api_key"))
-    api_key_source = app_state.get("google_api_key_source", "未設定") # 提供預設值
+    api_key_is_set = bool(app_state.get("google_api_key")) # 重複，可以移除一個
+    api_key_source = app_state.get("google_api_key_source", "未設定") # 若未設定來源，提供預設文字
+    operation_mode = app_state.get("operation_mode", "未知") # 獲取當前操作模式
 
-    # drive_service_account_loaded 應反映服務帳號是否已成功加載且 DriveService 可用
-    sa_loaded_and_functional = not app_state.get("critical_config_missing_sa_credentials", False) and \
-                               app_state.get("drive_service") is not None
+    # drive_service_account_loaded 的狀態取決於操作模式：
+    # - 在 "persistent" 模式下，它反映 Google Drive 服務帳號是否已成功加載且 DriveService 正常運作。
+    # - 在 "transient" 模式下，此狀態應為 False，因為 Drive 服務不在此模式下使用。
+    sa_loaded_and_functional = False
+    if operation_mode == "persistent":
+        # 持久模式下，檢查服務帳號憑證是否未缺失，且 DriveService 實例是否存在。
+        sa_loaded_and_functional = not app_state.get("critical_config_missing_sa_credentials", False) and \
+                                   app_state.get("drive_service") is not None
+    elif operation_mode == "transient":
+        # 暫存模式下，Drive 服務帳號不適用/不加載。
+        sa_loaded_and_functional = False
 
     return ApiKeyStatusResponse(
-        is_set=api_key_is_set,
-        source=api_key_source,
-        drive_service_account_loaded=sa_loaded_and_functional
+        is_set=api_key_is_set, # AI服務金鑰是否已設定
+        source=api_key_source, # AI服務金鑰的來源
+        drive_service_account_loaded=sa_loaded_and_functional # Drive服務帳號是否已加載並可用 (僅持久模式下有意義)
     )
 
-@app.post("/api/set_api_key", response_model=ApiKeyStatusResponse, tags=["設定"]) # "設定" tag
+@app.post("/api/set_api_key", response_model=ApiKeyStatusResponse, tags=["設定"])
 async def set_api_key(payload: ApiKeyRequest):
     if not payload.api_key:
-        raise HTTPException(status_code=400, detail="API 金鑰不能為空") # 中文錯誤信息
+        raise HTTPException(status_code=400, detail="API 金鑰不能為空")
 
     key_to_set = payload.api_key
-    app_state["google_api_key"] = key_to_set
-    app_state["google_api_key_source"] = "使用者提供" # "user_provided" -> "使用者提供"
+    app_state["google_api_key"] = key_to_set # 設定通用 AI 金鑰 (如 Gemini)
+    app_state["google_api_key_source"] = "使用者提供" # 記錄金鑰來源
     logger.info("COLAB_GOOGLE_API_KEY (用於 Gemini 等服務) 已由使用者透過 API 設定。")
+    operation_mode = app_state.get("operation_mode", "transient") # 獲取當前操作模式
 
-    # 只有在服務帳號資訊未從環境變數設定，或先前設定失敗時 (critical_config_missing_sa_credentials 為 True)
-    # 才嘗試使用此金鑰作為 DriveService 的服務帳號
-    if app_state.get("critical_config_missing_sa_credentials", True) or not app_state.get("service_account_info"):
-        try:
-            key_json = json.loads(key_to_set)
-            if isinstance(key_json, dict) and key_json.get("type") == "service_account":
-                logger.info("使用者提供的 API 金鑰被識別為服務帳號 JSON。嘗試用於 Google Drive 服務...")
+    # 如果使用者提供的金鑰是服務帳號 JSON，則嘗試用其設定 Google Drive 服務。
+    # 此操作僅在 "persistent" (持久) 模式下，且先前服務帳號憑證未成功從環境變數加載時進行。
+    # 在 "transient" (暫存) 模式下，即使提供了服務帳號 JSON，也不會初始化 DriveService。
+    if operation_mode == "persistent":
+        # 檢查是否需要設定 Drive 服務：1. 先前標記為缺失，或 2. Drive 服務帳號資訊為空
+        if app_state.get("critical_config_missing_sa_credentials", True) or not app_state.get("service_account_info"):
+            try:
+                key_json = json.loads(key_to_set) # 嘗試解析為 JSON
+                # 檢查解析後的 JSON 是否為有效的服務帳號格式
+                if isinstance(key_json, dict) and key_json.get("type") == "service_account":
+                    logger.info("使用者提供的 API 金鑰被識別為服務帳號 JSON。嘗試用於 Google Drive 服務 (持久模式)...")
+                    app_state["service_account_info"] = key_json # 儲存服務帳號資訊
+                    app_state["critical_config_missing_sa_credentials"] = False # 重設憑證缺失標記
 
-                app_state["service_account_info"] = key_json
-                # 重設憑證缺失標記，因為我們正要嘗試使用新的
-                app_state["critical_config_missing_sa_credentials"] = False
+                    # 嘗試重新初始化 GoogleDriveService 及相關依賴服務 (ReportIngestionService, APScheduler)
+                    try:
+                        # 如果已存在 DriveService 實例 (例如，先前因其他原因初始化失敗)，先清理
+                        if app_state.get("drive_service"):
+                            logger.info("正在替換已有的 DriveService 實例 (持久模式)...")
+                            app_state["drive_service"] = None
+                            app_state["report_ingestion_service"] = None
+                            if app_state.get("scheduler") and app_state["scheduler"].running: # 如果排程器正在運行
+                                app_state["scheduler"].shutdown(wait=False) # 關閉排程器
+                                app_state["scheduler"] = None
+                                logger.info("已關閉並移除現有排程器 (持久模式)，準備使用新憑證重啟。")
 
-                try:
-                    # 清理舊的 DriveService 實例 (如果存在)
-                    if app_state.get("drive_service"):
-                        logger.info("正在替換已有的 DriveService 實例...")
-                        app_state["drive_service"] = None # 釋放舊實例
-                        app_state["report_ingestion_service"] = None # 依賴服務也需重置
+                        # 初始化 DriveService
+                        app_state["drive_service"] = GoogleDriveService(service_account_info=key_json)
+                        logger.info("GoogleDriveService 已使用使用者提供的服務帳號資訊成功初始化 (持久模式)。")
+                        app_state["drive_service_status"] = "已初始化 (使用者提供的服務帳號, 持久模式)"
 
-                    app_state["drive_service"] = GoogleDriveService(service_account_info=key_json)
-                    logger.info("GoogleDriveService 已使用使用者提供的服務帳號資訊成功初始化。")
-                    app_state["drive_service_status"] = "已初始化 (使用者提供的服務帳號)" # 中文狀態
-
-                    # 如果 DAL 可用，重新初始化 ReportIngestionService
-                    if app_state.get("dal"):
-                        app_state["report_ingestion_service"] = ReportIngestionService(
-                            drive_service=app_state["drive_service"],
-                            dal=app_state["dal"]
-                        )
-                        logger.info("ReportIngestionService 已使用新的 DriveService 實例更新/初始化。")
-
-                        # 如果排程器未啟動且條件現已滿足 (Drive Folder ID 也已設定)，嘗試啟動排程器
-                        if (not app_state.get("scheduler") or not app_state["scheduler"].running) and \
-                           not app_state["critical_config_missing_drive_folders"]:
-
-                            logger.info("嘗試基於新提供的服務帳號資訊啟動排程器...")
-                            scheduler_interval_minutes = int(get_env_or_default("SCHEDULER_INTERVAL_MINUTES", "15"))
-                            # 確保舊的排程器已關閉 (如果存在且正在運行)
-                            existing_scheduler = app_state.get("scheduler")
-                            if existing_scheduler and existing_scheduler.running:
-                                existing_scheduler.shutdown(wait=False)
-                                logger.info("已關閉現有的排程器實例。")
-
-                            new_scheduler = AsyncIOScheduler(timezone="UTC")
-                            new_scheduler.add_job(
-                                trigger_report_ingestion_task,
-                                trigger=IntervalTrigger(minutes=scheduler_interval_minutes),
-                                args=[app_state["report_ingestion_service"]],
-                                id="report_ingestion_job",
-                                name="定期從 Google Drive 擷取報告 (使用者提供服務帳號後)", # 中文名稱
-                                replace_existing=True # 確保替換任何同 ID 的舊任務
+                        # 重新初始化 ReportIngestionService (依賴 DriveService 和 DAL)
+                        if app_state.get("dal"): # 確保 DAL 存在
+                            app_state["report_ingestion_service"] = ReportIngestionService(
+                                drive_service=app_state["drive_service"],
+                                dal=app_state["dal"]
                             )
-                            try:
-                                new_scheduler.start()
-                                app_state["scheduler"] = new_scheduler # 更新排程器實例
-                                logger.info(f"APScheduler (使用者提供服務帳號後) 已啟動，每隔 {scheduler_interval_minutes} 分鐘執行。")
-                            except Exception as e_sched:
-                                logger.error(f"APScheduler (使用者提供服務帳號後) 啟動失敗: {e_sched}", exc_info=True)
-                                app_state["scheduler"] = None # 確保啟動失敗時為 None
-                    else: # DAL 不可用
-                        logger.warning("DataAccessLayer 未初始化，ReportIngestionService 無法配置。")
+                            logger.info("ReportIngestionService 已使用新的 DriveService 實例更新/初始化 (持久模式)。")
 
-                except ValueError as e_drive: # GoogleDriveService 初始化失敗
-                    logger.error(f"使用使用者提供的服務帳號資訊初始化 GoogleDriveService 失敗 (ValueError): {e_drive}")
-                    app_state["drive_service"] = None
-                    app_state["report_ingestion_service"] = None
-                    app_state["drive_service_status"] = f"初始化錯誤 (使用者提供的服務帳號)：無效的憑證 ({e_drive})"
-                    app_state["critical_config_missing_sa_credentials"] = True # 初始化失敗，標記憑證缺失
-                except Exception as e_drive_other: # 其他未預期錯誤
-                    logger.error(f"使用使用者提供的服務帳號資訊初始化 GoogleDriveService 時發生未預期錯誤: {e_drive_other}", exc_info=True)
-                    app_state["drive_service"] = None
-                    app_state["report_ingestion_service"] = None
-                    app_state["drive_service_status"] = f"未預期的初始化錯誤 (使用者提供的服務帳號): {str(e_drive_other)[:100]}"
-                    app_state["critical_config_missing_sa_credentials"] = True # 初始化失敗，標記憑證缺失
-        except json.JSONDecodeError:
-            # 如果金鑰不是 JSON，則假設它是普通的 API 金鑰 (例如 Gemini)，不影響 Drive 服務憑證狀態
-            logger.info("使用者提供的 API 金鑰不是 JSON 格式。將其視為普通 API 金鑰，不影響 Drive 服務憑證。")
-            # 此處不更改 critical_config_missing_sa_credentials，因其狀態取決於環境變數或先前有效的 JSON 輸入
+                            # 如果條件滿足 (Drive Folder ID 已設定)，嘗試啟動/重啟排程器
+                            if (not app_state.get("scheduler") or not app_state["scheduler"].running) and \
+                               not app_state["critical_config_missing_drive_folders"]: # 檢查 Drive Folder ID
+                                logger.info("嘗試基於新提供的服務帳號資訊啟動排程器 (持久模式)...")
+                                scheduler_interval_minutes = int(get_env_or_default("SCHEDULER_INTERVAL_MINUTES", "15"))
+                                new_scheduler = AsyncIOScheduler(timezone="UTC") # 創建新的排程器實例
+                                new_scheduler.add_job(
+                                    trigger_report_ingestion_task,
+                                    trigger=IntervalTrigger(minutes=scheduler_interval_minutes),
+                                    args=[app_state["report_ingestion_service"]],
+                                    id="report_ingestion_job",
+                                    name="定期從 Google Drive 擷取報告 (使用者提供SA後, 持久模式)",
+                                    replace_existing=True
+                                )
+                                try:
+                                    new_scheduler.start()
+                                    app_state["scheduler"] = new_scheduler
+                                    logger.info(f"APScheduler (使用者提供SA後, 持久模式) 已啟動，每隔 {scheduler_interval_minutes} 分鐘執行。")
+                                except Exception as e_sched:
+                                    logger.error(f"APScheduler (使用者提供SA後, 持久模式) 啟動失敗: {e_sched}", exc_info=True)
+                                    app_state["scheduler"] = None
+                        else:
+                            logger.warning("DataAccessLayer 未初始化，ReportIngestionService 無法配置 (持久模式)。")
 
-    # 最終的 drive_sa_loaded 狀態應反映 GDS 是否實際已初始化且相關憑證未被標記為缺失
-    final_sa_loaded_and_functional = not app_state.get("critical_config_missing_sa_credentials", False) and \
-                                     app_state.get("drive_service") is not None
+                    except ValueError as e_drive:
+                        logger.error(f"使用使用者提供的服務帳號資訊初始化 GoogleDriveService 失敗 (ValueError): {e_drive} (持久模式)")
+                        app_state["drive_service"] = None
+                        app_state["report_ingestion_service"] = None
+                        app_state["drive_service_status"] = f"初始化錯誤 (使用者提供的SA)：無效的憑證 ({e_drive}, 持久模式)"
+                        app_state["critical_config_missing_sa_credentials"] = True
+                    except Exception as e_drive_other:
+                        logger.error(f"使用使用者提供的服務帳號資訊初始化 GoogleDriveService 時發生未預期錯誤: {e_drive_other} (持久模式)", exc_info=True)
+                        app_state["drive_service"] = None
+                        app_state["report_ingestion_service"] = None
+                        app_state["drive_service_status"] = f"未預期的初始化錯誤 (使用者提供的SA): {str(e_drive_other)[:100]} (持久模式)"
+                        app_state["critical_config_missing_sa_credentials"] = True
+            except json.JSONDecodeError:
+                logger.info("使用者提供的 API 金鑰不是 JSON 格式。將其視為普通 API 金鑰，不影響 Drive 服務憑證 (持久模式)。")
+        else: # 持久模式，但 Drive 服務憑證已從環境加載且有效
+            logger.info("持久模式下，Google Drive 服務帳號已從環境變數設定或先前已由使用者有效設定。此次提供的金鑰將僅用作 COLAB_GOOGLE_API_KEY。")
+    else: # transient mode
+        logger.info("暫存模式：使用者提供的 API 金鑰將被設定為 COLAB_GOOGLE_API_KEY。不會用於初始化 Google Drive 相關服務。")
+        # 在暫存模式下，即使提供了看起來像服務帳號的 JSON，也不會去初始化 DriveService 或排程器。
+        # critical_config_missing_sa_credentials 和 drive_service_status 應保持其暫存模式的狀態。
+        app_state["drive_service_status"] = "暫存模式下未啟用"
+        app_state["critical_config_missing_sa_credentials"] = False # 在暫存模式下，SA憑證不被視為"缺失"（因為不需要）
+
+
+    final_sa_loaded_and_functional = False
+    if operation_mode == "persistent":
+        final_sa_loaded_and_functional = not app_state.get("critical_config_missing_sa_credentials", False) and \
+                                         app_state.get("drive_service") is not None
 
     return ApiKeyStatusResponse(
         is_set=True,
-        source="使用者提供", # "user_provided"
+        source="使用者提供",
         drive_service_account_loaded=final_sa_loaded_and_functional
     )
 

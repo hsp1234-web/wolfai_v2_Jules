@@ -17,6 +17,7 @@ Wolf AI V2.2 是一個旨在幫助使用者深入分析、總結並問答各類�
     *   支援資料庫備份與還原 (透過 Drive 操作)。
 *   **金鑰管理**: 優先從 Colab 環境密鑰讀取 API 金鑰，若無則引導使用者輸入。
 *   **Colab 一鍵部署**: 透過 `run_in_colab.ipynb` 筆記本快速啟動完整應用。
+*   **雙操作模式**: 支援「暫存模式」（快速啟動，資料不落地）與「持久模式」（整合 Google Drive，資料永久保存）。
 
 ## 技術棧
 
@@ -48,16 +49,24 @@ Wolf AI V2.2 是一個旨在幫助使用者深入分析、總結並問答各類�
 2.  **執行唯一的程式碼儲存格**:
     *   筆記本現在只包含一個主要的程式碼儲存格。依照儲存格內的中文提示，逐步執行即可完成所有設定與啟動。
 
+3.  **選擇操作模式**:
+    *   在執行儲存格的初期，您將看到一個「選擇操作模式」的下拉選單。您可以選擇：
+        *   **暫存模式 (transient)**：此模式為預設選項，無需 Google Drive 授權即可快速啟動應用程式。所有資料（如上傳的報告、資料庫）將僅儲存在當前的 Colab 會話中，會話結束後資料將會遺失。此模式適用於快速體驗或不需要資料保存的場景。
+        *   **持久模式 (persistent)**：此模式需要您授權 Colab 掛載您的 Google Drive，並設定相關的雲端儲存密鑰。所有資料將會儲存到您指定的 Google Drive 路徑，從而實現資料的永久保存和跨會話使用。
+    *   請根據您的需求選擇合適的模式。如果選擇「持久模式」，請確保已正確設定後述的 Colab Secrets。
+
 ### 主要自動化步驟概覽
 
 該程式碼儲存格將自動執行以下核心步驟：
 
-*   **Google Drive 掛載**: 提示並協助您授權 Colab 存取您的 Google Drive。
+*   **操作模式選擇**: 如上所述，允許使用者選擇「暫存模式」或「持久模式」。後續步驟的行為（如 Drive 掛載、Secrets 檢查）將依此選擇而定。
+*   **Google Drive 掛載**: 如果選擇「持久模式」，則提示並協助您授權 Colab 存取您的 Google Drive。暫存模式下跳過此步驟。
 *   **Colab Secrets 設定引導與檢查**:
-    *   引導您在 Colab 的「密鑰 (Secrets)」管理器中設定必要的金鑰，例如 `COLAB_GOOGLE_API_KEY` (用於 Google AI 服務) 和 `GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT` (用於 Google Drive 存取)。
-    *   同時引導設定 `WOLF_IN_FOLDER_ID` 和 `WOLF_PROCESSED_FOLDER_ID`，用於指定 Google Drive 中存放報告的資料夾。
-    *   在執行後續步驟前，腳本會檢查這些 Secrets 是否均已設定，若有缺失則會提示並終止執行，要求您補齊設定。
-*   **啟動模式選擇**: 您可以在儲存格內選擇應用程式的啟動模式（`normal` 或 `debug`）。
+    *   引導您在 Colab 的「密鑰 (Secrets)」管理器中設定必要的金鑰。
+    *   `COLAB_GOOGLE_API_KEY` (用於 Google AI 服務)：建議在兩種模式下都設定。
+    *   `GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT` (用於 Google Drive 存取), `WOLF_IN_FOLDER_ID` (Drive 中存放待處理報告的資料夾 ID), `WOLF_PROCESSED_FOLDER_ID` (Drive 中存放已處理報告的資料夾 ID)：這些主要在「持久模式」下是必需的。
+    *   在執行後續步驟前，腳本會根據所選操作模式檢查相應的 Secrets 是否均已設定，若有缺失則會提示並終止執行。
+*   **應用程式啟動模式選擇**: 您可以在儲存格內選擇應用程式後端和前端服務的啟動模式（`normal` 或 `debug`）。此選擇與操作模式（暫存/持久）是獨立的。
 *   **專案部署與服務啟動**:
     *   自動從 GitHub (`https://github.com/hsp1234-web/wolfAI_v1.git`) 複製最新的專案程式碼。
     *   執行位於專案中 `scripts/start.sh` 的主控啟動腳本。此腳本會：
@@ -69,14 +78,23 @@ Wolf AI V2.2 是一個旨在幫助使用者深入分析、總結並問答各類�
 
 ### Colab Secrets 的重要性
 
-為了確保應用程式能夠順利運行並存取必要的雲端服務（如 Google AI 和 Google Drive），請務必依照 Colab 筆記本內的引導，在「密鑰 (Secrets)」管理器中正確設定以下項目：
+為了確保應用程式能夠順利運行並存取必要的雲端服務，請務必依照 Colab 筆記本內的引導，在「密鑰 (Secrets)」管理器中正確設定以下項目：
 
-*   `COLAB_GOOGLE_API_KEY`: 您的 Google AI 服務 API 金鑰。
-*   `GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT`: 您的 Google Cloud 服務帳號金鑰的 JSON **內容** (具備 Drive 存取權限)。
-*   `WOLF_IN_FOLDER_ID`: Google Drive 中用於存放**待處理報告**的資料夾 ID。
-*   `WOLF_PROCESSED_FOLDER_ID`: Google Drive 中用於存放**已處理報告**的資料夾 ID。
+*   **`COLAB_GOOGLE_API_KEY`**: 您的 Google AI 服務 API 金鑰。
+    *   **重要性**: 在「暫存模式」和「持久模式」下都**強烈建議設定**，以確保 AI 分析功能可用。如果未設定，AI 對話和分析將無法進行。
+*   **`GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT`**: 您的 Google Cloud 服務帳號金鑰的 JSON **內容** (需具備 Drive 存取權限)。
+    *   **重要性**: 主要在「**持久模式**」下**必需**。用於授權應用程式存取您的 Google Drive 以讀取報告、儲存資料庫等。
+    *   在「暫存模式」下，此密鑰不是必需的，因為應用程式不會嘗試連接到 Google Drive。
+*   **`WOLF_IN_FOLDER_ID`**: Google Drive 中用於存放**待處理報告**的資料夾 ID。
+    *   **重要性**: 主要在「**持久模式**」下**必需**。指定應用程式從哪個 Drive 資料夾讀取新的報告檔案。
+    *   在「暫存模式」下不是必需的。
+*   **`WOLF_PROCESSED_FOLDER_ID`**: Google Drive 中用於存放**已處理報告**的資料夾 ID。
+    *   **重要性**: 主要在「**持久模式**」下**必需**。指定已處理報告在 Drive 中的歸檔位置。
+    *   在「暫存模式」下不是必需的。
 
-建議您在首次執行筆記本前，預先在自己的 Google Drive 中創建 `wolf_AI_data` 資料夾，並在其下創建 `wolf_in` 和 `wolf_in/processed` 子資料夾。然後將這些資料夾的 ID 填入 Colab Secrets。如果您的 Drive 中已有 `reports.sqlite` 和 `prompts.sqlite` 資料庫檔案，請將它們放置於 `wolf_AI_data` 目錄下，後端服務啟動時會嘗試使用它們。
+**設定建議**：
+*   **持久模式**: 請務必完整設定上述所有四個密鑰。建議您在首次執行筆記本前，預先在自己的 Google Drive 中創建 `wolf_AI_data` 資料夾，並在其下創建 `wolf_in` 和 `wolf_in/processed` 子資料夾。然後將這些資料夾的 ID 填入 Colab Secrets。如果您的 Drive 中已有 `reports.sqlite` 和 `prompts.sqlite` 資料庫檔案，請將它們放置於 `wolf_AI_data` 目錄下，後端服務啟動時會嘗試使用它們。
+*   **暫存模式**: `COLAB_GOOGLE_API_KEY` 仍然是推薦設定的，以使用 AI 功能。其他三個 Drive 相關密鑰可以不設定。應用程式在此模式下會使用 Colab 本地的臨時儲存空間。
 
 ### 開始使用
 
