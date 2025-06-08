@@ -1,0 +1,19 @@
+{
+  "name": "shan-jia-lang-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "善甲狼週報 V2.0 前端 (Next.js + TypeScript)",
+  "scripts": {
+    "dev": "echo 'TODO: next dev'",
+    "build": "echo 'TODO: next build'",
+    "start": "echo 'TODO: next start'",
+    "lint": "echo 'TODO: next lint'",
+    "tsc": "echo 'TODO: tsc --noEmit'"
+  },
+  "keywords": [
+    "nextjs",
+    "react",
+    "typescript"
+  ],
+  "author": "AI Agent Jules"
+}
