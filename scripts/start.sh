@@ -31,8 +31,9 @@ pip install -r backend/requirements.txt --no-cache-dir -q # -q 靜默模式，--
 echo "[start.sh] ✅ 後端 Python 依賴已成功安裝。"
 
 echo "[start.sh] 正在安裝前端 Node.js 依賴 (來源: frontend/package.json)..."
-# 使用子 shell ( ) 來執行 frontend 目錄下的 npm ci，這樣可以避免手動 pushd/popd
-(cd frontend && npm ci --verbose) # --verbose 提供較詳細輸出，有助於除錯
+# 使用子 shell ( ) 來執行 frontend 目錄下的 npm install，這樣可以避免手動 pushd/popd
+# 將 npm ci 更換為 npm install 以提高容錯性
+(cd frontend && npm install --verbose)
 echo "[start.sh] ✅ 前端 Node.js 依賴已成功安裝。"
 
 
