@@ -6,3 +6,4 @@ aiosqlite
 fastapi
 uvicorn[standard]
 APScheduler
+pytz
