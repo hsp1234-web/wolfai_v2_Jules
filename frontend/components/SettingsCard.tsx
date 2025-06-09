@@ -139,13 +139,6 @@ const SettingsCard: React.FC = () => {
                 如果後端已配置環境變數，則此處無需手動設定。
                 注意：貼上的金鑰將用於後續的 AI 請求。如果貼上的是 Google 服務帳號 JSON 內容，系統也會嘗試用其設定 Google Drive 存取權限（如果尚未從環境變數加載）。
               </Typography>
-              {(!apiKeyStatus?.is_set || (apiKeyStatus?.is_set && apiKeyStatus?.source !== 'environment')) && (
-                <Alert severity="info" sx={{ mb: 1 }}>
-                  <strong>提示：</strong>為了增強安全性並避免重複輸入，建議您優先在 Colab 的「金鑰」(Secrets) 功能中設定名為 <code>COLAB_GOOGLE_API_KEY</code> 的金鑰。
-                  在 Colab Notebook 頁面，點擊左側工具列的鑰匙圖示 (🔑) 即可找到金鑰管理介面。
-                  如果已在此處設定，則無需在下方欄位手動輸入。
-                </Alert>
-              )}
               <TextField
                 fullWidth
                 label="貼上您的 Google API 金鑰或服務帳號 JSON"

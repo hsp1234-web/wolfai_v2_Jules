@@ -6,6 +6,3 @@ aiosqlite
 fastapi
 uvicorn[standard]
 APScheduler
-pytz
-python-docx
-PyPDF2
