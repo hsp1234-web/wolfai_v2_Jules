@@ -3,76 +3,17 @@ import logging
 import shutil # 用於檔案操作，例如刪除暫存檔案
 from datetime import datetime
 from typing import TYPE_CHECKING, Tuple, Optional, List
+import docx
+import PyPDF2
 
 if TYPE_CHECKING:
     from .google_drive_service import GoogleDriveService
     from .data_access_layer import DataAccessLayer
 
-# 配置日誌記錄器
-# logging.basicConfig(level=logging.INFO) # 通常在主應用 (main.py) 中統一配置
-logger = logging.getLogger(__name__)
-
-# 定義暫存下載檔案的目錄路徑
-# SERVICE_DIR 指向當前檔案 (report_ingestion_service.py) 所在的目錄 (services/)
-SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
-# BACKEND_DIR 指向 backend/ 目錄
-BACKEND_DIR = os.path.dirname(SERVICE_DIR)
-# TEMP_DOWNLOAD_DIR 指向 backend/data/temp_downloads/
-TEMP_DOWNLOAD_DIR = os.path.join(BACKEND_DIR, 'data', 'temp_downloads')
-
-# 啟動時確保暫存下載目錄存在
-os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-logger.info(f"報告擷取服務：暫存下載目錄設定於 '{TEMP_DOWNLOAD_DIR}'。")
-
-class ReportIngestionService:
-    def __init__(self, drive_service: 'GoogleDriveService', dal: 'DataAccessLayer'):
-        """
-        初始化報告擷取服務。
-        :param drive_service: GoogleDriveService 的實例，用於與 Google Drive 互動。
-        :param dal: DataAccessLayer 的實例，用於資料庫操作。
-        """
-        self.drive_service = drive_service
-        self.dal = dal
-        logger.info("報告擷取服務 (ReportIngestionService) 已初始化。")
-
-    def _get_file_extension(self, file_name: str) -> str: # 輔助函數：獲取檔案的副檔名 (小寫)。
-        return os.path.splitext(file_name)[1].lower()
-
-    async def _parse_report_content(self, local_file_path: str) -> str:
-# 配置日誌記錄器
-# logging.basicConfig(level=logging.INFO) # 通常在主應用 (main.py) 中統一配置
-logger = logging.getLogger(__name__)
-
-# 定義暫存下載檔案的目錄路徑
-# SERVICE_DIR 指向當前檔案 (report_ingestion_service.py) 所在的目錄 (services/)
-SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
-# BACKEND_DIR 指向 backend/ 目錄
-BACKEND_DIR = os.path.dirname(SERVICE_DIR)
-# TEMP_DOWNLOAD_DIR 指向 backend/data/temp_downloads/
-TEMP_DOWNLOAD_DIR = os.path.join(BACKEND_DIR, 'data', 'temp_downloads')
-
-# 啟動時確保暫存下載目錄存在
-os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
-logger.info(f"報告擷取服務：暫存下載目錄設定於 '{TEMP_DOWNLOAD_DIR}'。")
-
-class ReportIngestionService:
-    def __init__(self, drive_service: 'GoogleDriveService', dal: 'DataAccessLayer'):
-        """
-        初始化報告擷取服務。
-        :param drive_service: GoogleDriveService 的實例，用於與 Google Drive 互動。
-        :param dal: DataAccessLayer 的實例，用於資料庫操作。
-        """
-        self.drive_service = drive_service
-        self.dal = dal
-        logger.info("報告擷取服務 (ReportIngestionService) 已初始化。")
-
-    def _get_file_extension(self, file_name: str) -> str: # 輔助函數：獲取檔案的副檔名 (小寫)。
-        return os.path.splitext(file_name)[1].lower()
-
     async def _parse_report_content(self, local_file_path: str) -> str:
         """
         異步解析本地報告檔案的內容。
-        目前主要支援 .txt 和 .md 純文字檔案。其他格式會記錄警告並返回預設內容。
+        支援 .txt, .md, .docx, .pdf。
         :param local_file_path: 本地檔案的路徑。
         :return: 解析出的檔案內容字串。
         """
@@ -80,25 +21,52 @@ class ReportIngestionService:
         content = ""
         logger.info(f"開始解析檔案 '{local_file_path}' (類型: {file_extension})...")
         try:
-            if file_extension == ".txt":
+            if file_extension == ".txt" or file_extension == ".md":
                 with open(local_file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                logger.info(f"成功解析純文字檔案 (.txt): {local_file_path}")
-            elif file_extension == ".md": # Markdown 也視為純文字處理
-                with open(local_file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                logger.info(f"成功解析 Markdown 檔案 (.md): {local_file_path}")
-            # TODO (未來擴展): 添加對 .docx, .pdf 等複雜格式的解析邏輯。
-            # 例如，可以使用 python-docx 處理 .docx，pypdf 或其他 PDF 解析庫處理 .pdf。
+                logger.info(f"成功解析純文字檔案: {local_file_path}")
+
             elif file_extension == ".docx":
-                logger.warning(f"注意：.docx 檔案 ({local_file_path}) 的內容解析功能目前尚未完整實現。將返回預設提示。")
-                content = "[.docx 檔案內容解析功能待實現]"
+                doc = docx.Document(local_file_path)
+                full_text = [para.text for para in doc.paragraphs]
+                content = '\n'.join(full_text) # 使用 \n 以確保換行符在字串中正確表示
+                logger.info(f"成功解析 .docx 檔案: {local_file_path}")
+
             elif file_extension == ".pdf":
-                logger.warning(f"注意：.pdf 檔案 ({local_file_path}) 的內容解析功能目前尚未完整實現。將返回預設提示。")
-                content = "[.pdf 檔案內容解析功能待實現]"
+                text = ""
+                with open(local_file_path, 'rb') as f:
+                    pdf_reader = PyPDF2.PdfReader(f)
+                    # 檢查 PDF 是否加密
+                    if pdf_reader.is_encrypted:
+                        try:
+                            # 嘗試使用空密碼解密，適用於某些“僅設定擁有者密碼”的PDF
+                            pdf_reader.decrypt('')
+                            logger.info(f"PDF 檔案 '{local_file_path}' 已使用空密碼成功解密。")
+                        except Exception as decrypt_err:
+                            logger.warning(f"PDF 檔案 '{local_file_path}' 已加密且無法使用空密碼解密: {decrypt_err}。將嘗試直接提取 (可能失敗)。")
+                            # 如果解密失敗，仍然可以嘗試提取，但結果可能為空或不完整
+
+                    for page_num, page in enumerate(pdf_reader.pages):
+                        try:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n" # 每頁內容後加換行
+                            else:
+                                logger.info(f"PDF 檔案 '{local_file_path}' 的第 {page_num + 1} 頁未提取到文字 (可能是圖片或掃描頁)。")
+                        except Exception as page_extract_err:
+                            logger.warning(f"PDF 檔案 '{local_file_path}' 的第 {page_num + 1} 頁提取文字時發生錯誤: {page_extract_err}")
+                content = text.strip() # 移除末尾可能多餘的換行
+                if not content and len(pdf_reader.pages) > 0:
+                    logger.warning(f"PDF 檔案 '{local_file_path}' 所有頁面均未提取到有效文字。可能是圖片型PDF或內容無法識別。")
+                elif content:
+                    logger.info(f"成功解析 .pdf 檔案: {local_file_path}")
+                else: # len(pdf_reader.pages) == 0
+                     logger.info(f"PDF 檔案 '{local_file_path}' 沒有頁面可供解析。")
+
             else:
-                logger.warning(f"不支援的檔案類型 '{file_extension}' ({local_file_path})。無法進行內容解析。")
+                logger.warning(f"不支援的檔案類型 '{file_extension}' ({local_file_path})。")
                 content = f"[不支援的檔案類型進行內容解析: {file_extension}]"
+
         except Exception as e:
             logger.error(f"解析檔案 '{local_file_path}' 過程中發生錯誤: {e}", exc_info=True)
             content = f"[檔案內容解析時發生錯誤: {str(e)}]"
