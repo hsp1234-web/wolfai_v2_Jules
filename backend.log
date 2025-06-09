@@ -1,0 +1,15 @@
+2025-06-09 15:20:56,536 - backend.services.report_ingestion_service - INFO - 報告擷取服務：暫存下載目錄設定於 '/app/backend/data/temp_downloads'。
+/app/backend/main.py:60: DeprecationWarning:
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+  @app.on_event("startup")
+/app/backend/main.py:178: DeprecationWarning:
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+  @app.on_event("shutdown")

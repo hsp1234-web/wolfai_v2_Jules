@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 # --- 參數處理 ---
 MODE="normal" # 預設模式
@@ -41,8 +40,8 @@ install_frontend_dependencies() {
     if [ -f "frontend/package.json" ]; then
         echo "切換到 frontend/ 目錄..."
         pushd frontend > /dev/null # > /dev/null 避免 pushd 的額外輸出
-        echo "在 frontend/ 目錄下執行 npm ci --verbose..."
-        npm ci --verbose
+        echo "在 frontend/ 目錄下執行 npm ci..." # Removed --verbose from original plan
+        npm ci
         echo "前端 Node.js 依賴已成功安裝。"
         popd > /dev/null # 返回先前目錄
     else
@@ -54,29 +53,47 @@ install_frontend_dependencies() {
 # --- 服務啟動 ---
 start_backend_service() {
     echo "準備啟動後端 FastAPI 服務..."
-    pushd backend > /dev/null
+    # 不再需要進入 backend 目錄
     if [ "$MODE" == "debug" ]; then
-        echo "以除錯模式啟動後端服務 (背景執行，日誌混合輸出至控制台)..."
-        nohup python main.py &
+        echo "以除錯模式啟動後端服務 (從專案根目錄執行，背景執行，日誌混合輸出至控制台)..."
+        # 使用 -m 選項從專案根目錄執行
+        nohup python -m backend.main & # nohup.out will be in /app
         echo "後端服務已在背景啟動 (除錯模式)。"
     else
-        echo "以一般模式啟動後端服務 (背景執行，日誌輸出至專案根目錄的 backend.log)..."
-        nohup python main.py > ../backend.log 2>&1 &
+        echo "以一般模式啟動後端服務 (從專案根目錄執行，背景執行，日誌輸出至專案根目錄的 backend.log)..."
+        # 使用 -m 選項從專案根目錄執行
+        nohup python -m backend.main > backend.log 2>&1 &
         echo "後端服務已在背景啟動。日誌請查看 backend.log"
     fi
-    popd > /dev/null
 }
 
 start_frontend_service() {
     echo "準備啟動前端 Next.js 服務..."
+    FRONTEND_PORT=3000
+    echo "嘗試強制終止任何已在運行的舊前端進程 (端口 ${FRONTEND_PORT})..."
+    pkill -9 -f "npm run dev.*-- -p ${FRONTEND_PORT}" || true
+    pkill -9 -f "next dev.*-p ${FRONTEND_PORT}" || true
+    sleep 1 # 短暫等待進程終止
+    echo "檢查端口 ${FRONTEND_PORT} 是否被占用..."
+    PID=$(lsof -t -i:${FRONTEND_PORT} 2>/dev/null)
+
+    if [ -n "$PID" ]; then
+        echo "警告：端口 ${FRONTEND_PORT} 已被進程 ID ${PID} 占用。正在嘗試終止舊進程..."
+        kill -9 "$PID"
+        sleep 2 # 等待進程終止
+        echo "舊進程 ID ${PID} 已被終止。"
+    else
+        echo "端口 ${FRONTEND_PORT} 可用。"
+    fi
+
     pushd frontend > /dev/null
     if [ "$MODE" == "debug" ]; then
         echo "以除錯模式啟動前端服務 (背景執行，日誌混合輸出至控制台)..."
-        nohup npm run dev -- -p 3000 -H 0.0.0.0 &
+        nohup npm run dev -- -p ${FRONTEND_PORT} -H 0.0.0.0 & # nohup.out will be in /app/frontend
         echo "前端服務已在背景啟動 (除錯模式)。"
     else
         echo "以一般模式啟動前端服務 (背景執行，日誌輸出至專案根目錄的 frontend.log)..."
-        nohup npm run dev -- -p 3000 -H 0.0.0.0 > ../frontend.log 2>&1 &
+        nohup npm run dev -- -p ${FRONTEND_PORT} -H 0.0.0.0 > ../frontend.log 2>&1 &
         echo "前端服務已在背景啟動。日誌請查看 frontend.log"
     fi
     popd > /dev/null
