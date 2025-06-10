@@ -20,7 +20,13 @@ def get_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
 
 class Settings(BaseSettings):
     OPERATION_MODE: str = Field(default=get_env("OPERATION_MODE", "transient"), description="操作模式 (例如：\"transient\" 或 \"persistent\")")
-    COLAB_GOOGLE_API_KEY: Optional[SecretStr] = Field(default=get_env("COLAB_GOOGLE_API_KEY"), description="用於 Gemini API 的 Google API 金鑰 (可選)")
+    API_KEY_FRED: Optional[SecretStr] = Field(default=get_env("API_KEY_FRED"), description="用於 FRED 的 API 金鑰 (可選)")
+    API_KEY_FINMIND: Optional[SecretStr] = Field(default=get_env("API_KEY_FINMIND"), description="用於 FinMind 的 API 金鑰 (可選)")
+    API_KEY_FINNHUB: Optional[SecretStr] = Field(default=get_env("API_KEY_FINNHUB"), description="用於 Finnhub 的 API 金鑰 (可選)")
+    API_KEY_FMP: Optional[SecretStr] = Field(default=get_env("API_KEY_FMP"), description="用於 Financial Modeling Prep 的 API 金鑰 (可選)")
+    ALPHA_VANTAGE_API_KEY: Optional[SecretStr] = Field(default=get_env("ALPHA_VANTAGE_API_KEY"), description="用於 Alpha Vantage 的 API 金鑰 (可選)")
+    DEEPSEEK_API_KEY: Optional[SecretStr] = Field(default=get_env("DEEPSEEK_API_KEY"), description="用於 DeepSeek 的 API 金鑰 (可選)")
+    GOOGLE_API_KEY: Optional[SecretStr] = Field(default=get_env("GOOGLE_API_KEY"), description="用於 Gemini API 的 Google API 金鑰 (可選)")
     GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT: Optional[SecretStr] = Field(default=get_env("GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT"), description="Google Drive 服務帳戶的 JSON 金鑰內容 (可選, 持久模式下需要)")
     WOLF_IN_FOLDER_ID: Optional[str] = Field(default=get_env("WOLF_IN_FOLDER_ID"), description="Google Drive 中用於接收報告的資料夾 ID (可選, 持久模式下排程器需要)")
     WOLF_PROCESSED_FOLDER_ID: Optional[str] = Field(default=get_env("WOLF_PROCESSED_FOLDER_ID"), description="Google Drive 中用於存放已處理報告的資料夾 ID (可選, 持久模式下排程器需要)")

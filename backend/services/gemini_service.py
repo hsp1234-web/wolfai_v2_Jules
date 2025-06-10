@@ -38,7 +38,7 @@ class GeminiService:
             extra={"props": {"service_name": "GeminiService", "initialization_status": "starting"}}
         )
 
-        api_key_secret = settings.COLAB_GOOGLE_API_KEY
+        api_key_secret = settings.GOOGLE_API_KEY
         if api_key_secret:
             try:
                 api_key = api_key_secret.get_secret_value()
@@ -51,7 +51,7 @@ class GeminiService:
                     )
                 else:
                     logger.warning(
-                        "COLAB_GOOGLE_API_KEY 在設定中存在但為空值，GeminiService 功能將受限。",
+                        "GOOGLE_API_KEY 在設定中存在但為空值，GeminiService 功能將受限。",
                         extra={"props": {"service_name": "GeminiService", "configuration_status": "api_key_empty"}}
                     )
             except Exception as e:
@@ -62,7 +62,7 @@ class GeminiService:
                 # self.is_configured remains False
         else:
             logger.warning(
-                "未在設定中找到 COLAB_GOOGLE_API_KEY，GeminiService 功能將受限。",
+                "未在設定中找到 GOOGLE_API_KEY，GeminiService 功能將受限。",
                 extra={"props": {"service_name": "GeminiService", "configuration_status": "api_key_missing"}}
             )
 
