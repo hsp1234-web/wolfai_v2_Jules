@@ -1,3 +1,15 @@
+<div align="center">
+
+[![專案狀態](https://img.shields.io/badge/status-in_development-green.svg)](https://github.com/hsp1234-web/wolfAI_v1)
+[![GitHub 最後提交](https://img.shields.io/github/last-commit/hsp1234-web/wolfAI_v1)](https://github.com/hsp1234-web/wolfAI_v1/commits/main)
+[![開源授權](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![GitHub 議題](https://img.shields.io/github/issues/hsp1234-web/wolfAI_v1)](https://github.com/hsp1234-web/wolfAI_v1/issues)
+[![後端 CI/CD](https://github.com/hsp1234-web/wolfAI_v1/actions/workflows/ci.yml/badge.svg)](https://github.com/hsp1234-web/wolfAI_v1/actions/workflows/ci.yml)
+
+</div>
+
+---
+
 # WolfAI 專案
 
 [![在 Colab 中開啟](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hsp1234-web/wolfAI_v1/blob/main/run_in_colab_v5.ipynb)

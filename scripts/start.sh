@@ -1,118 +1,41 @@
 #!/bin/bash
 
-# --- 參數處理 ---
-MODE="normal" # 預設模式
+# 設定 -e，任何指令失敗時立即退出腳本
+set -e
 
-# 解析命令行參數
-for arg in "$@"
-do
-    case $arg in
-        --mode=*)
-        MODE="${arg#*=}"
-        shift # 移除 --mode=debug
-        ;;
-    esac
-done
-
-echo "啟動模式: $MODE"
-
-# --- 環境偵測 ---
-IN_COLAB=false
-# 檢查是否在 Colab 或 Datalab 環境中
-if [ -n "$COLAB_GPU" ] || [ -n "$DATALAB_SETTINGS_OVERRIDES" ]; then
-    IN_COLAB=true
-fi
-echo "是否在 Colab 環境中: $IN_COLAB"
-
-# --- 依賴安裝 ---
-install_backend_dependencies() {
-    echo "正在檢查並安裝後端 Python 依賴 (來自 backend/requirements.txt)..."
-    if [ -f "backend/requirements.txt" ]; then
-        pip install -r backend/requirements.txt -q --no-warn-script-location
-        echo "後端 Python 依賴已成功安裝。"
-    else
-        echo "錯誤：後端依賴定義檔 backend/requirements.txt 未找到。"
-        exit 1 # set -e 會處理退出，但明確指出錯誤更好
-    fi
-}
-
-install_frontend_dependencies() {
-    echo "正在檢查並安裝前端 Node.js 依賴 (來自 frontend/package.json)..."
-    if [ -f "frontend/package.json" ]; then
-        echo "切換到 frontend/ 目錄..."
-        pushd frontend > /dev/null # > /dev/null 避免 pushd 的額外輸出
-        echo "在 frontend/ 目錄下執行 npm ci..."
-        npm ci # 移除了 --verbose 以減少輸出
-        echo "前端 Node.js 依賴已成功安裝。"
-        popd > /dev/null # 返回先前目錄
-    else
-        echo "錯誤：前端依賴定義檔 frontend/package.json 未找到。"
-        exit 1 # set -e 會處理退出
-    fi
-}
-
-# --- 服務啟動 ---
-start_backend_service() {
-    echo "準備啟動後端 FastAPI 服務..."
-    # 不再需要進入 backend 目錄
-    if [ "$MODE" == "debug" ]; then
-        echo "以除錯模式啟動後端服務 (從專案根目錄執行，背景執行，日誌混合輸出至控制台)..."
-        # 使用 -m 選項從專案根目錄執行
-        nohup python -m backend.main & # nohup.out 將位於 /app
-        echo "後端服務已在背景啟動 (除錯模式)。"
-    else
-        echo "以一般模式啟動後端服務 (從專案根目錄執行，背景執行，日誌輸出至專案根目錄的 backend.log)..."
-        # 使用 -m 選項從專案根目錄執行
-        nohup python -m backend.main > backend.log 2>&1 &
-        echo "後端服務已在背景啟動。日誌請查看 backend.log"
-    fi
-}
-
-start_frontend_service() {
-    echo "準備啟動前端 Next.js 服務..."
-    FRONTEND_PORT=3000
-
-    # 端口檢查與清理迴圈
-    for i in {1..5}; do
-        echo "第 $i 次嘗試檢查端口 $FRONTEND_PORT..."
-        PID=$(lsof -ti:$FRONTEND_PORT 2>/dev/null)
-
-        if [ -n "$PID" ]; then
-            echo "偵測到端口 $FRONTEND_PORT 正被進程 $PID 使用，正在嘗試終止..."
-            kill -9 "$PID"
-            echo "已嘗試終止進程 $PID。"
-            sleep 1 # 給予系統時間來釋放端口
-        else
-            echo "端口 $FRONTEND_PORT 目前可用。"
-            break # 跳出迴圈
-        fi
+# 為日誌加上時間戳的函數
+log_with_timestamp() {
+    while IFS= read -r line; do
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"
     done
-
-    # 再次檢查端口是否仍被占用
-    if lsof -ti:$FRONTEND_PORT > /dev/null; then
-        echo "ERROR_PORT_IN_USE_請注意端口已被佔用"
-        exit 10
-    fi
-
-    pushd frontend > /dev/null
-    if [ "$MODE" == "debug" ]; then
-        echo "以除錯模式啟動前端服務 (背景執行，日誌混合輸出至控制台)..."
-        nohup npm run dev -- -p ${FRONTEND_PORT} -H 0.0.0.0 & # nohup.out 將位於 /app/frontend
-        echo "前端服務已在背景啟動 (除錯模式)。"
-    else
-        echo "以一般模式啟動前端服務 (背景執行，日誌輸出至專案根目錄的 frontend.log)..."
-        nohup npm run dev -- -p ${FRONTEND_PORT} -H 0.0.0.0 > ../frontend.log 2>&1 &
-        echo "前端服務已在背景啟動。日誌請查看 frontend.log"
-    fi
-    popd > /dev/null
 }
 
-# --- 主執行流程 ---
-echo "--- 開始執行啟動腳本 ---"
+# --- 啟動後端 ---
+echo "INFO: 正在設定並啟動後端 FastAPI 伺服器..."
+cd backend
+echo "INFO: 正在安裝後端依賴..."
+pip install -r requirements.txt
+echo "INFO: 後端依賴安裝完畢。"
+echo "INFO: 正在背景啟動 Uvicorn..."
+nohup uvicorn main:app --host 0.0.0.0 --port 8000 2>&1 | log_with_timestamp > ../backend_server.log &
+BACKEND_PID=$!
+cd ..
+echo "SUCCESS: 後端服務已啟動，PID: $BACKEND_PID。"
 
-install_backend_dependencies
-install_frontend_dependencies
-start_backend_service
-start_frontend_service
+# --- 啟動前端 ---
+echo "INFO: 正在設定並啟動前端 Next.js 伺服器..."
+cd frontend
+echo "INFO: 正在安裝前端依賴 (npm install)..."
+npm install
+echo "INFO: 前端依賴安裝完畢。"
+echo "INFO: 正在背景啟動 Next.js 開發伺服器..."
+nohup npm run dev 2>&1 | log_with_timestamp > ../frontend_server.log &
+FRONTEND_PID=$!
+cd ..
+echo "SUCCESS: 前端服務已啟動，PID: $FRONTEND_PID。"
 
-echo "--- 啟動腳本執行完畢 ---"
+echo "----------------------------------------------------"
+echo "所有服務已啟動。請檢查日誌檔案以確認狀態："
+echo "  - 後端日誌: backend_server.log"
+echo "  - 前端日誌: frontend_server.log"
+echo "----------------------------------------------------"
