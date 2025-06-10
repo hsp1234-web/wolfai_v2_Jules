@@ -127,6 +127,23 @@ async def test_summarize_text_api_failure_max_retries(mock_settings_with_api_key
     assert "API請求錯誤" in result, "達到最大重試次數後應返回錯誤訊息。"
     assert mock_generative_model.generate_content_async.call_count == 3, "API 應被調用三次 (1次原始 + 2次重試)。"
 
+@pytest.mark.asyncio
+async def test_summarize_text_api_empty_response_no_block(mock_settings_with_api_key, mock_genai_configure, mock_generative_model):
+    """
+    測試 summarize_text：模擬 API 返回一個既無有效文本也無阻擋原因的空回應。
+    預期服務應返回 "無法從回應中提取摘要"。
+    """
+    service = GeminiService()
+
+    mock_empty_response = MagicMock()
+    mock_empty_response.parts = [] # 無文本部分
+    mock_empty_response.text = None # 無直接文本
+    mock_empty_response.prompt_feedback = None # 無反饋或反饋中無阻擋原因
+    mock_generative_model.generate_content_async.return_value = mock_empty_response
+
+    result = await service.summarize_text("一些進行摘要的內容")
+    assert result == "無法從回應中提取摘要"
+
 # ---- analyze_report tests ----
 
 @pytest.mark.asyncio
@@ -183,6 +200,42 @@ async def test_analyze_report_api_failure_max_retries(mock_settings_with_api_key
     assert isinstance(result, dict) and "錯誤" in result
     assert "API請求錯誤" in result["錯誤"], "達到最大重試次數後應返回包含錯誤的字典。"
     assert mock_generative_model.generate_content_async.call_count == 2
+
+@pytest.mark.asyncio
+async def test_analyze_report_empty_input(mock_settings_with_api_key, mock_genai_configure):
+    """測試 analyze_report：當輸入報告內容為空、None 或僅空白時。"""
+    service = GeminiService() # is_configured will be True due to fixture
+
+    result_empty_str = await service.analyze_report("")
+    assert isinstance(result_empty_str, dict) and "錯誤" in result_empty_str
+    assert "報告內容為空" in result_empty_str["錯誤"]
+
+    result_none = await service.analyze_report(None)
+    assert isinstance(result_none, dict) and "錯誤" in result_none
+    assert "報告內容為空" in result_none["錯誤"]
+
+    result_whitespace = await service.analyze_report("   \n\t   ")
+    assert isinstance(result_whitespace, dict) and "錯誤" in result_whitespace
+    assert "報告內容為空" in result_whitespace["錯誤"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_report_api_empty_response_no_block(mock_settings_with_api_key, mock_genai_configure, mock_generative_model):
+    """
+    測試 analyze_report：模擬 API 返回一個既無有效文本也無阻擋原因的空回應。
+    預期服務應返回 {"錯誤": "無法從API回應中提取分析文字"}。
+    """
+    service = GeminiService()
+
+    mock_empty_response = MagicMock()
+    mock_empty_response.parts = [] # 無文本部分
+    mock_empty_response.text = None # 無直接文本
+    mock_empty_response.prompt_feedback = None # 無反饋或反饋中無阻擋原因
+    mock_generative_model.generate_content_async.return_value = mock_empty_response
+
+    result = await service.analyze_report("一些進行分析的報告內容")
+    assert isinstance(result, dict) and "錯誤" in result
+    assert result["錯誤"] == "無法從API回應中提取分析文字"
 
 @pytest.mark.asyncio
 async def test_analyze_report_handles_markdown_json(mock_settings_with_api_key, mock_genai_configure, mock_generative_model):

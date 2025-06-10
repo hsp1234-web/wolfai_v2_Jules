@@ -79,20 +79,71 @@ def test_get_api_key_status_default(client: TestClient, mocker):
     # This can be tricky if another test configures it globally via genai.configure.
     # For a true unit test of this endpoint, mocking app_state["gemini_service"] might be needed.
 
-    # Mock the GeminiService instance within app_state for this specific test
-    mock_gemini_service = MagicMock()
-    mock_gemini_service.is_configured = False # Simulate not configured
-    mocker.patch.dict(app_state, {"gemini_service": mock_gemini_service})
-    # Also ensure related app_state keys are as expected for a "default" scenario
-    mocker.patch.dict(app_state, {"google_api_key": None, "service_account_info": None})
+    # 確保 app_state 處於預期的初始狀態
+    # 模擬 GeminiService 未配置，且沒有 API 金鑰和服務帳號信息
+    mock_gemini_service = mocker.MagicMock()
+    mock_gemini_service.is_configured = False
 
+    # 使用 mocker.patch.dict 來臨時修改 app_state，測試結束後會自動恢復
+    with mocker.patch.dict(app_state, {
+        "gemini_service": mock_gemini_service,
+        "google_api_key": None,
+        "google_api_key_source": None,
+        "service_account_info": None
+    }):
+        response = client.get("/api/get_api_key_status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_set"] is False, "預期 API 金鑰在初始狀態下未設定。"
+        assert data["source"] is None, "預期 API 金鑰來源在初始狀態下為 None。"
+        assert data["gemini_configured"] is False, "預期 Gemini 在初始狀態下未配置。"
+        assert data["drive_service_account_loaded"] is False, "預期 Drive 服務帳號在初始狀態下未載入。"
 
-    response = client.get("/api/get_api_key_status")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["is_set"] is False, "預期 API 金鑰未設定。"
-    assert data["gemini_configured"] is False, "預期 Gemini 未配置。"
-    assert data["drive_service_account_loaded"] is False, "預期 Drive 服務帳號未載入。"
+def test_get_api_key_status_after_successful_set(client: TestClient, mocker):
+    """
+    測試在成功設定 API 金鑰後，調用 /api/get_api_key_status 是否返回正確的狀態。
+    """
+    # 模擬 genai.configure 成功執行
+    mocker.patch('google.generativeai.configure')
+
+    # 確保 app_state 中的 GeminiService 實例存在且可被修改
+    # 通常 lifespan 中會初始化，若無則 mock 一個
+    if app_state.get("gemini_service") is None:
+        app_state["gemini_service"] = mocker.MagicMock()
+
+    # 初始時，gemini_service 可能已根據環境變數配置，這裡我們先將其重置為未配置狀態
+    # 以便清晰地測試 set_api_key 的效果。
+    # 注意：如果依賴 lifespan 中的真實 GeminiService 初始化，這種 mock 可能需要更小心處理。
+    # 為了測試的獨立性，這裡假設我們可以控制 is_configured 的初始狀態。
+    initial_gemini_service_mock = mocker.MagicMock()
+    initial_gemini_service_mock.is_configured = False
+
+    with mocker.patch.dict(app_state, {
+        "gemini_service": initial_gemini_service_mock,
+        "google_api_key": None, # 確保初始沒有 key
+        "google_api_key_source": None,
+        "service_account_info": True # 假設 SA 金鑰已加載，以隔離測試目標
+    }):
+        # 步驟 1: 調用 /api/set_api_key 設定一個有效的金鑰
+        set_key_payload = {"api_key": "a_valid_test_key_for_status_check"}
+        set_response = client.post("/api/set_api_key", json=set_key_payload)
+        assert set_response.status_code == 200, f"設定 API 金鑰應成功，得到 {set_response.status_code}, {set_response.text}"
+
+        # set_api_key 端點內部會更新 app_state["gemini_service"].is_configured
+        # 我們需要確保 get_api_key_status 反映的是 set_api_key 執行後 app_state 的真實狀態
+        # 因此，這裡我們不再 mock gemini_service.is_configured 的最終值，而是依賴 set_api_key 端點的正確執行
+
+        # 步驟 2: 調用 /api/get_api_key_status 獲取狀態
+        status_response = client.get("/api/get_api_key_status")
+        assert status_response.status_code == 200
+        data = status_response.json()
+
+        assert data["is_set"] is True, "成功設定 API 金鑰後，is_set 應為 True。"
+        assert data["source"] == "user_input", "API 金鑰來源應為 'user_input'。"
+        # 假設 genai.configure 成功後，is_configured 會被設為 True
+        assert data["gemini_configured"] is True, "成功設定 API 金鑰且 genai.configure 成功後，gemini_configured 應為 True。"
+        assert data["drive_service_account_loaded"] is True, "Drive 服務帳號載入狀態應保持不變 (在此測試中假設為 True)。"
+
 
 @pytest.mark.parametrize("api_key_value, expected_status_code, expect_gemini_configured_after_set", [
     ("test_valid_key", 200, True),

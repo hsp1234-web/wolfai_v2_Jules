@@ -1,0 +1,263 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Wolf AI V2.2 Backend",
+    "description": "後端 API 服務，用於 Wolf AI 可觀測性分析平台 V2.2",
+    "version": "2.2.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "健康檢查"
+        ],
+        "summary": "執行基礎健康檢查",
+        "description": "執行基礎健康檢查。\n\n此端點提供應用程式的總體健康狀態，包括排程器、Drive 服務、\n關鍵設定以及 Gemini AI 服務的配置狀態。",
+        "operationId": "health_check_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthCheckResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/get_api_key_status": {
+      "get": {
+        "tags": [
+          "設定"
+        ],
+        "summary": "獲取 API 金鑰設定狀態",
+        "description": "獲取當前 API 金鑰的設定狀態。\n\n此端點返回 Gemini API 金鑰是否已設定、其來源（環境變數或使用者輸入）、\nGoogle Drive 服務帳號是否已加載，以及 Gemini 服務是否已成功配置。",
+        "operationId": "get_api_key_status_api_get_api_key_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/set_api_key": {
+      "post": {
+        "tags": [
+          "設定"
+        ],
+        "summary": "設定 API 金鑰",
+        "description": "設定或更新用於 Google Gemini AI 服務的 API 金鑰。\n\n使用者可以通過此端點在運行時提供 API 金鑰。\n提交的金鑰將被暫存，並用於重新配置 Gemini 服務。\n成功設定後，將返回更新後的 API 金鑰狀態。\n如果提供的金鑰為空，將返回 400 錯誤。\n如果 Gemini 服務未初始化，將返回 503 錯誤。",
+        "operationId": "set_api_key_api_set_api_key_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiKeyRequest": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "description": "要設定的 API 金鑰字串。此金鑰將用於與 Google Gemini AI 服務的交互。"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "ApiKeyRequest",
+        "description": "用於設定 API 金鑰的請求模型。"
+      },
+      "ApiKeyStatusResponse": {
+        "properties": {
+          "is_set": {
+            "type": "boolean",
+            "title": "Is Set",
+            "description": "指示 Gemini API 金鑰當前是否已在後端設定（無論是來自環境變數或使用者輸入）。"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "API 金鑰的來源。可能的值：'environment/config'（來自設定檔案或環境變數），'user_input'（由使用者透過 API 設定）。如果金鑰未設定，則為 null。"
+          },
+          "drive_service_account_loaded": {
+            "type": "boolean",
+            "title": "Drive Service Account Loaded",
+            "description": "指示 Google Drive 服務帳號金鑰是否已成功從設定中加載並解析。"
+          },
+          "gemini_configured": {
+            "type": "boolean",
+            "title": "Gemini Configured",
+            "description": "指示 Gemini AI 服務當前是否已使用有效的 API 金鑰成功配置。"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_set",
+          "drive_service_account_loaded",
+          "gemini_configured"
+        ],
+        "title": "ApiKeyStatusResponse",
+        "description": "API 金鑰設定狀態的回應模型。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthCheckResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "API 的總體健康狀態，例如 '正常', '警告', '錯誤'。",
+            "default": "正常"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "關於 API 當前狀態的簡短描述性訊息。",
+            "default": "API 正常運行中"
+          },
+          "scheduler_status": {
+            "type": "string",
+            "title": "Scheduler Status",
+            "description": "背景排程服務的運行狀態。",
+            "default": "未初始化"
+          },
+          "drive_service_status": {
+            "type": "string",
+            "title": "Drive Service Status",
+            "description": "Google Drive 服務的初始化和連接狀態。",
+            "default": "未初始化"
+          },
+          "config_status": {
+            "type": "string",
+            "title": "Config Status",
+            "description": "關鍵應用程式設定的狀態（例如，憑證、資料夾ID）。",
+            "default": "檢查中..."
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "description": "應用程式當前的操作模式 (例如：'transient' 表示暫存模式，'persistent' 表示持久模式)。",
+            "default": "未知"
+          },
+          "gemini_status": {
+            "type": "string",
+            "title": "Gemini Status",
+            "description": "Google Gemini AI 服務的配置和可用性狀態。",
+            "default": "未初始化"
+          }
+        },
+        "type": "object",
+        "title": "HealthCheckResponse",
+        "description": "標準健康檢查端點的回應模型，提供應用程式總體狀態的快速概覽。"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "健康檢查",
+      "description": "應用程式健康狀態相關端點。"
+    },
+    {
+      "name": "通用操作",
+      "description": "提供應用程式基本資訊或通用功能的端點。"
+    },
+    {
+      "name": "設定",
+      "description": "與應用程式設定相關的 API 端點。"
+    }
+  ]
+}

@@ -6,7 +6,8 @@ from typing import Optional
 # If ImportError occurs, this might need to be changed to:
 # from pydantic_settings import BaseSettings, SettingsConfigDict
 # from pydantic import Field, SecretStr
-from pydantic import BaseSettings, Field, SecretStr
+from pydantic_settings import BaseSettings # Updated import for Pydantic V2
+from pydantic import Field, SecretStr # Field and SecretStr remain in pydantic
 
 def get_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
     """Helper to get environment variable, stripping quotes if present."""
@@ -28,9 +29,14 @@ class Settings(BaseSettings):
     SCHEDULER_INTERVAL_MINUTES: int = Field(default=int(get_env("SCHEDULER_INTERVAL_MINUTES", "15")), description="排程器執行的時間間隔（分鐘）")
 
     class Config:
-        env_file = ".env" # Optional: if you use a .env file for local development
+        # For Pydantic V2, env_file and env_file_encoding are typically part of SettingsConfigDict
+        # However, to minimize changes if an old .env mechanism is used elsewhere,
+        # we'll keep these if they don't break. The primary fix is BaseSettings.
+        # If .env loading is an issue, model_config would be the way.
+        env_file = ".env"
         env_file_encoding = 'utf-8'
-        # For Pydantic V2, you might use:
+        # For Pydantic V2, the recommended way is:
+        # from pydantic_settings import SettingsConfigDict
         # model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
 settings = Settings()
