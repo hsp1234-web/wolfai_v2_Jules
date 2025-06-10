@@ -12,16 +12,26 @@ logger = logging.getLogger(__name__)
 
 class GeminiService:
     """
-    提供使用 Google Gemini AI 模型進行文字摘要和分析的服務。
+    提供使用 Google Gemini AI 模型進行文字摘要和結構化分析的服務。
+
+    該服務封裝了與 Google Gemini API 互動的邏輯，包括：
+    - API 金鑰的配置與管理。
+    - 呼叫 Gemini 模型進行文字摘要。
+    - 呼叫 Gemini 模型進行特定結構的報告分析 (例如，提取主要發現、潛在風險、建議行動)。
+    - 處理 API 請求的重試機制。
+    - 解析和記錄 API 的回應。
     """
 
     def __init__(self):
         """
-        初始化 Gemini AI 服務。
-        從設定中讀取 API 金鑰並配置 genai。
+        初始化 GeminiService。
+
+        在初始化過程中，服務會嘗試從應用程式設定中讀取 Google API 金鑰，
+        並使用該金鑰配置 `google.generativeai` 函式庫。
+        服務的 `is_configured` 屬性將反映配置是否成功。
         """
         self.is_configured = False
-        self.model_name = 'gemini-pro' # Default model, can be made configurable
+        self.model_name = 'gemini-pro' # 預設使用的 Gemini 模型，未來可以考慮使其可配置。
 
         logger.info(
             "Gemini AI 服務 (GeminiService) 初始化中...",
@@ -58,7 +68,17 @@ class GeminiService:
 
     async def summarize_text(self, text: str, max_retries: int = 1, retry_delay: int = 5) -> Optional[str]:
         """
-        使用 Gemini AI 模型對提供的文字進行摘要。
+        使用 Gemini AI 模型對提供的文字內容進行摘要。
+
+        Args:
+            text (str): 需要進行摘要的原始文字。
+            max_retries (int, optional): API 請求失敗時的最大重試次數。預設為 1。
+            retry_delay (int, optional): 每次重試之間的延遲時間 (秒)。預設為 5。
+
+        Returns:
+            Optional[str]: 如果成功，返回摘要後的文字字串。
+                           如果服務未配置、輸入文字為空、API 請求失敗或回應格式不正確，
+                           則返回 None 或包含錯誤訊息的字串。
         """
         operation_props = {"api_action": "summarize_text", "model_name": self.model_name, "input_length": len(text) if text else 0}
         if not self.is_configured:
@@ -121,11 +141,30 @@ class GeminiService:
                     return f"API請求錯誤：{str(e)}"
 
         logger.error("文字摘要請求最終失敗 (迴圈結束)。", extra={"props": {**operation_props, "final_status": "loop_ended_failure"}})
-        return "文字摘要請求最終失敗"
+        return "文字摘要請求最終失敗" # 或者可以返回 None，讓呼叫者更一致地處理失敗
 
     async def analyze_report(self, report_content: str, max_retries: int = 1, retry_delay: int = 5) -> Optional[Dict[str, Any]]:
         """
         使用 Gemini AI 模型對提供的報告內容進行結構化分析。
+
+        該方法會指示模型扮演商業分析師的角色，並要求以 JSON 格式返回分析結果，
+        包含 'main_findings', 'potential_risks', 和 'suggested_actions' 三個鍵。
+
+        Args:
+            report_content (str): 需要進行分析的報告原文。
+            max_retries (int, optional): API 請求失敗時的最大重試次數。預設為 1。
+            retry_delay (int, optional): 每次重試之間的延遲時間 (秒)。預設為 5。
+
+        Returns:
+            Optional[Dict[str, Any]]: 如果成功，返回一個包含結構化分析結果的字典。
+                                      例如：
+                                      {
+                                          "main_findings": "...",
+                                          "potential_risks": "...",
+                                          "suggested_actions": "..."
+                                      }
+                                      如果服務未配置、輸入內容為空、API 請求失敗、回應非預期 JSON 格式
+                                      或 JSON 解析失敗，則返回包含 "錯誤" 鍵的字典。
         """
         operation_props = {"api_action": "analyze_report", "model_name": self.model_name, "input_length": len(report_content) if report_content else 0}
         if not self.is_configured:

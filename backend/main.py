@@ -47,14 +47,14 @@ class HealthCheckResponse(BaseModel):
     gemini_status: str = Field(default="未初始化", description="Google Gemini AI 服務的配置和可用性狀態。")
 
 class ApiKeyStatusResponse(BaseModel):
-    """獲取 API 金鑰設定狀態端點的回應模型。"""
+    """API 金鑰設定狀態的回應模型。"""
     is_set: bool = Field(..., description="指示 Gemini API 金鑰當前是否已在後端設定（無論是來自環境變數或使用者輸入）。")
     source: Optional[str] = Field(default=None, description="API 金鑰的來源。可能的值：'environment/config'（來自設定檔案或環境變數），'user_input'（由使用者透過 API 設定）。如果金鑰未設定，則為 null。")
     drive_service_account_loaded: bool = Field(..., description="指示 Google Drive 服務帳號金鑰是否已成功從設定中加載並解析。")
     gemini_configured: bool = Field(..., description="指示 Gemini AI 服務當前是否已使用有效的 API 金鑰成功配置。")
 
 class ComponentStatus(BaseModel):
-    """詳細健康檢查中單個應用程式組件的狀態回報模型。"""
+    """詳細健康檢查中單個應用程式組件的狀態模型。"""
     status: str = Field(..., description="組件的運行狀態。常見值：'正常', '異常', '未配置', '未啟用', '設定錯誤', '嚴重故障'。")
     details: Optional[str] = Field(default=None, description="關於組件當前狀態的額外詳細資訊或錯誤訊息摘要。")
 
@@ -81,10 +81,22 @@ class VerboseHealthCheckResponse(BaseModel):
     filesystem_status: FilesystemComponentStatus = Field(..., description="應用程式所需檔案系統操作（如暫存目錄讀寫權限）的狀態。")
     frontend_service_status: FrontendComponentStatus = Field(..., description="前端服務的可達性狀態（從後端角度進行探測）。")
 
-
-# --- Lifespan Management ---
+# --- Lifespan Management (應用程式生命週期管理) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    FastAPI 應用程式的生命週期管理器。
+
+    在應用程式啟動時執行初始化操作，並在應用程式關閉時執行清理操作。
+    目前的初始化操作包括：
+    - 配置 JSON 格式的日誌記錄器。
+    - 從設定中加載並初始化應用程式狀態 (app_state)，包括 API 金鑰、服務帳號資訊、資料庫路徑等。
+    - 初始化各個服務：DataAccessLayer, ParsingService, GeminiService, GoogleDriveService (如果適用), ReportIngestionService。
+    - 如果應用程式以 "persistent" (持久) 模式運行，則啟動 APScheduler 排程器以執行背景任務。
+
+    在應用程式關閉時：
+    - 如果排程器正在運行，則將其關閉。
+    """
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     for handler in root_logger.handlers[:]: root_logger.removeHandler(handler)
@@ -218,6 +230,12 @@ app = FastAPI(
 # --- API Endpoints ---
 @app.get("/api/health", response_model=HealthCheckResponse, tags=["健康檢查"])
 async def health_check():
+    """
+    執行基礎健康檢查。
+
+    此端點提供應用程式的總體健康狀態，包括排程器、Drive 服務、
+    關鍵設定以及 Gemini AI 服務的配置狀態。
+    """
     try:
         config_parts = []
         if app_state.get("critical_config_missing_sa_credentials"): config_parts.append("缺少服務帳號憑證")
@@ -243,6 +261,13 @@ async def health_check():
 
 @app.get("/api/health/verbose", response_model=VerboseHealthCheckResponse, tags=["健康檢查"], include_in_schema=False)
 async def verbose_health_check():
+    """
+    執行詳細的健康檢查。
+
+    此端點提供應用程式各個關鍵組件的詳細狀態報告，
+    包括資料庫連接、AI 服務、Drive 服務、排程器、檔案系統權限以及前端服務的可達性。
+    此端點通常不包含在公開的 OpenAPI schema 中，主要用於內部監控或調試。
+    """
     current_time_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
     current_time_taipei = current_time_utc.astimezone(pytz.timezone('Asia/Taipei'))
     statuses: Dict[str, Any] = {
@@ -329,6 +354,12 @@ async def verbose_health_check():
 
 @app.get("/api/get_api_key_status", response_model=ApiKeyStatusResponse, tags=["設定"])
 async def get_api_key_status():
+    """
+    獲取當前 API 金鑰的設定狀態。
+
+    此端點返回 Gemini API 金鑰是否已設定、其來源（環境變數或使用者輸入）、
+    Google Drive 服務帳號是否已加載，以及 Gemini 服務是否已成功配置。
+    """
     try:
         gemini_service_instance = app_state.get("gemini_service")
         gemini_configured_status = gemini_service_instance.is_configured if gemini_service_instance else False
@@ -342,36 +373,53 @@ async def get_api_key_status():
 
 @app.post("/api/set_api_key", response_model=ApiKeyStatusResponse, tags=["設定"])
 async def set_api_key(payload: ApiKeyRequest):
+    """
+    設定或更新用於 Google Gemini AI 服務的 API 金鑰。
+
+    使用者可以通過此端點在運行時提供 API 金鑰。
+    提交的金鑰將被暫存，並用於重新配置 Gemini 服務。
+    成功設定後，將返回更新後的 API 金鑰狀態。
+    如果提供的金鑰為空，將返回 400 錯誤。
+    如果 Gemini 服務未初始化，將返回 503 錯誤。
+    """
     request_id = os.urandom(8).hex()
     logger.info(f"接收到設定 API 金鑰請求。", extra={"props": {"api_endpoint": "/api/set_api_key", "request_id": request_id}})
     try:
         if not payload.api_key or not payload.api_key.strip():
             logger.warning("設定 API 金鑰請求失敗：API 金鑰不得為空。", extra={"props": {"request_id": request_id, "validation_error": "empty_api_key"}})
             raise HTTPException(status_code=400, detail="API 金鑰不得為空。")
+
+        # 更新應用程式狀態中的 API 金鑰及其來源
         app_state["google_api_key"] = payload.api_key
         app_state["google_api_key_source"] = "user_input"
         logger.info(f"Google API Key 已透過 API 暫存於 app_state。", extra={"props": {"request_id": request_id, "source": "user_input"}})
+
         gemini_service_instance = app_state.get("gemini_service")
         if not gemini_service_instance:
             logger.error("GeminiService 未初始化，無法使用新金鑰進行配置。", extra={"props": {"request_id": request_id, "internal_error": "gemini_service_not_init"}})
             raise HTTPException(status_code=503, detail="Gemini服務內部未正確初始化，無法設定API金鑰。")
+
         logger.info("正在使用新的 API 金鑰重新配置 GeminiService...", extra={"props": {"request_id": request_id}})
         try:
+            # 直接調用 genai.configure 來更新金鑰
             genai.configure(api_key=payload.api_key)
-            gemini_service_instance.is_configured = True
+            gemini_service_instance.is_configured = True # 更新服務實例的配置狀態
             logger.info("GeminiService 已成功使用新金鑰重新配置。", extra={"props": {"request_id": request_id, "reconfig_status": "success"}})
         except Exception as e_reconfig:
-            gemini_service_instance.is_configured = False
+            gemini_service_instance.is_configured = False # 配置失敗，更新狀態
             logger.error(f"使用新 API 金鑰重新配置 GeminiService 時失敗: {e_reconfig}", exc_info=True, extra={"props": {"request_id": request_id, "reconfig_status": "failure", "error": str(e_reconfig)}})
-        return await get_api_key_status()
-    except HTTPException as http_exc: raise http_exc
-    except Exception as e:
+            # 即使重新配置失敗，也返回當前狀態，讓客戶端知道金鑰已設定但可能無效
+
+        return await get_api_key_status() # 返回更新後的金鑰狀態
+    except HTTPException as http_exc: # 重新引發已知的 HTTP 異常
+        raise http_exc
+    except Exception as e: # 捕獲其他所有未預期錯誤
         logger.error(f"設定 API 金鑰時發生未預期錯誤: {e}", exc_info=True, extra={"props": {"api_endpoint": "/api/set_api_key", "request_id": request_id}})
         raise HTTPException(status_code=500, detail="設定 API 金鑰時發生內部伺服器錯誤。")
 
 app.openapi_tags = [
     {"name": "健康檢查", "description": "應用程式健康狀態相關端點。"},
-    {"name": "General", "description": "一般性 API 端點。"},
+    {"name": "通用操作", "description": "提供應用程式基本資訊或通用功能的端點。"},
     {"name": "設定", "description": "與應用程式設定相關的 API 端點。"},
 ]
 
