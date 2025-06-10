@@ -1,0 +1,251 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import Container from '@mui/material/Container';
+import Typography from '@mui/material/Typography';
+import Box from '@mui/material/Box';
+import Grid from '@mui/material/Grid';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import Chip from '@mui/material/Chip';
+import CircularProgress from '@mui/material/CircularProgress';
+import Button from '@mui/material/Button';
+import Alert from '@mui/material/Alert';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'; // For unknown status
+
+// TypeScript Interfaces based on backend Pydantic models
+interface ComponentStatus {
+  status: string;
+  details?: string;
+}
+
+interface SchedulerComponentStatus extends ComponentStatus {
+  next_run_time?: string; // ISO string
+}
+
+interface FilesystemComponentStatus extends ComponentStatus {
+  temp_dir_path?: string;
+}
+
+interface FrontendComponentStatus extends ComponentStatus {
+  frontend_url?: string;
+}
+
+interface VerboseHealthData {
+  overall_status: string;
+  database_status: ComponentStatus;
+  gemini_api_status: ComponentStatus;
+  google_drive_status: ComponentStatus;
+  scheduler_status: SchedulerComponentStatus;
+  filesystem_status: FilesystemComponentStatus;
+  frontend_service_status: FrontendComponentStatus;
+  timestamp: string; // ISO string
+}
+
+// Helper to render status chip
+const StatusChip: React.FC<{ status: string, details?: string }> = ({ status, details }) => {
+  let color: 'success' | 'error' | 'warning' | 'info' | 'default' = 'default';
+  let icon: React.ReactElement | undefined = <HelpOutlineIcon />;
+
+  const lowerStatus = status.toLowerCase();
+
+  if (lowerStatus.includes('正常') || lowerStatus.includes('已配置') || lowerStatus.includes('已初始化') || lowerStatus.includes('運行中') || lowerStatus.includes('可讀寫') || lowerStatus.includes('可達')) {
+    color = 'success';
+    icon = <CheckCircleOutlineIcon />;
+  } else if (lowerStatus.includes('異常') || lowerStatus.includes('失敗') || lowerStatus.includes('錯誤') || lowerStatus.includes('嚴重故障') || lowerStatus.includes('權限異常') || lowerStatus.includes('無法連線') || lowerStatus.includes('未配置') || lowerStatus.includes('未運行')) {
+    color = 'error';
+    icon = <ErrorOutlineIcon />;
+  } else if (lowerStatus.includes('警告') || lowerStatus.includes('部分異常') || lowerStatus.includes('回應異常') || lowerStatus.includes('請求超時') || lowerStatus.includes('設定錯誤')) {
+    color = 'warning';
+    icon = <WarningAmberOutlinedIcon />;
+  } else if (lowerStatus.includes('未知') || lowerStatus.includes('未初始化')) {
+    color = 'info';
+  }
+
+  return <Chip icon={icon} label={status} color={color} variant="outlined" title={details}/>;
+};
+
+
+export default function HealthDashboardPage() {
+  const [healthData, setHealthData] = useState<VerboseHealthData | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchHealthData = useCallback(async (isManualRefresh = false) => {
+    if (!isManualRefresh) { // Don't show main loading spinner for background refreshes unless it's the first load
+        if(healthData === null) setLoading(true);
+    } else {
+        setLoading(true); // For manual refresh, always show loading
+    }
+    setError(null);
+
+    try {
+      // In a real deployment, this URL might need to be absolute or configured via an environment variable
+      const response = await fetch('/api/health/verbose');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`獲取健康狀態失敗: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      const data: VerboseHealthData = await response.json();
+      setHealthData(data);
+    } catch (e: any) {
+      logger.error(`獲取健康狀態時發生錯誤: ${e.message}`);
+      setError(`獲取健康狀態時發生錯誤: ${e.message}`);
+      // Optionally, clear old data on error or keep it stale
+      // setHealthData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [healthData]); // healthData in dependency to control initial loading correctly
+
+  useEffect(() => {
+    fetchHealthData(true); // Initial fetch with loading true
+    const intervalId = setInterval(() => fetchHealthData(false), 10000); // Refresh every 10 seconds
+
+    return () => clearInterval(intervalId); // Cleanup interval on component unmount
+  }, [fetchHealthData]); // fetchHealthData is memoized with useCallback
+
+  const formatTimestamp = (isoString?: string) => {
+    if (!isoString) return 'N/A';
+    try {
+      return new Date(isoString).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+    } catch {
+      return isoString; // Return original if parsing fails
+    }
+  };
+
+  // Client-side logger (optional, for debugging in browser console)
+  const logger = {
+    info: (...args: any[]) => console.log('[HealthDashboard]', ...args),
+    error: (...args: any[]) => console.error('[HealthDashboard]', ...args),
+  };
+
+
+  if (loading && !healthData) { // Show full page loader only on initial load
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <CircularProgress size={60} />
+        <Typography variant="h6" sx={{ ml: 2 }}>正在載入健康狀態...</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h4" component="h1">
+          系統健康狀態儀表板
+        </Typography>
+        <Button
+          variant="contained"
+          onClick={() => fetchHealthData(true)}
+          startIcon={<RefreshIcon />}
+          disabled={loading && healthData !== null} // Disable only if background loading
+        >
+          {loading && healthData !== null ? '刷新中...' : '手動刷新'}
+        </Button>
+      </Box>
+
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {!healthData && !loading && !error && (
+         <Alert severity="info" sx={{ mb: 2 }}>暫無健康狀態資料可顯示。可能是首次載入或系統無回應。</Alert>
+      )}
+
+      {healthData && (
+        <Box>
+          <Grid container spacing={1} alignItems="center" sx={{ mb: 2 }}>
+            <Grid item>
+              <Typography variant="h6">總體狀態:</Typography>
+            </Grid>
+            <Grid item>
+              <StatusChip status={healthData.overall_status} />
+            </Grid>
+            <Grid item xs={12} sm>
+               <Typography variant="body2" color="textSecondary" sx={{textAlign: {sm: 'right'}}}>
+                最後更新時間 (台北): {formatTimestamp(healthData.timestamp)}
+              </Typography>
+            </Grid>
+          </Grid>
+
+          <Grid container spacing={3}>
+            {/* Database Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>資料庫狀態</Typography>
+                  <StatusChip status={healthData.database_status.status} details={healthData.database_status.details} />
+                  {healthData.database_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.database_status.details}</Typography>}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Gemini API Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>Gemini AI 服務</Typography>
+                  <StatusChip status={healthData.gemini_api_status.status} details={healthData.gemini_api_status.details} />
+                  {healthData.gemini_api_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.gemini_api_status.details}</Typography>}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Google Drive Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>Google Drive 服務</Typography>
+                  <StatusChip status={healthData.google_drive_status.status} details={healthData.google_drive_status.details} />
+                  {healthData.google_drive_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.google_drive_status.details}</Typography>}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Scheduler Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>排程器狀態</Typography>
+                  <StatusChip status={healthData.scheduler_status.status} details={healthData.scheduler_status.details} />
+                  {healthData.scheduler_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.scheduler_status.details}</Typography>}
+                  {healthData.scheduler_status.next_run_time && (
+                    <Typography variant="body2" sx={{ mt: 1 }}>下次運行 (UTC): {formatTimestamp(healthData.scheduler_status.next_run_time)}</Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Filesystem Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>檔案系統 (暫存區)</Typography>
+                  <StatusChip status={healthData.filesystem_status.status} details={healthData.filesystem_status.details} />
+                  {healthData.filesystem_status.temp_dir_path && <Typography variant="body2" sx={{ mt: 1 }}>路徑: {healthData.filesystem_status.temp_dir_path}</Typography>}
+                  {healthData.filesystem_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.filesystem_status.details}</Typography>}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Frontend Service Status */}
+            <Grid item xs={12} sm={6} md={4}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>前端服務 (自身探測)</Typography>
+                  <StatusChip status={healthData.frontend_service_status.status} details={healthData.frontend_service_status.details} />
+                   {healthData.frontend_service_status.frontend_url && <Typography variant="body2" sx={{ mt: 1 }}>探測 URL: {healthData.frontend_service_status.frontend_url}</Typography>}
+                  {healthData.frontend_service_status.details && <Typography variant="body2" sx={{ mt: 1 }}>{healthData.frontend_service_status.details}</Typography>}
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+      )}
+    </Container>
+  );
+}
