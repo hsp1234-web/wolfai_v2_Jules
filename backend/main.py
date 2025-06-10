@@ -259,7 +259,7 @@ app = FastAPI(
 )
 
 # --- API Endpoints ---
-@app.get("/api/health", response_model=HealthCheckResponse, tags=["健康檢查"], summary="執行基礎健康檢查")
+@app.get("/api/v1/health", response_model=HealthCheckResponse, tags=["健康檢查"], summary="執行基礎健康檢查")
 async def health_check():
     """
     執行基礎健康檢查。
@@ -290,7 +290,7 @@ async def health_check():
         return HealthCheckResponse( status="錯誤", message=f"健康檢查端點異常: {str(e)}", scheduler_status="未知",
             drive_service_status="未知", config_status="未知", mode=app_state.get("operation_mode", "未知"), gemini_status="未知" )
 
-@app.get("/api/health/verbose", response_model=VerboseHealthCheckResponse, tags=["健康檢查"], summary="執行詳細健康檢查", include_in_schema=False)
+@app.get("/api/v1/health/verbose", response_model=VerboseHealthCheckResponse, tags=["健康檢查"], summary="執行詳細健康檢查", include_in_schema=False)
 async def verbose_health_check():
     """
     執行詳細的健康檢查。
@@ -383,7 +383,7 @@ async def verbose_health_check():
         filesystem_status=FilesystemComponentStatus(**statuses["filesystem_status"]),
         frontend_service_status=FrontendComponentStatus(**statuses["frontend_service_status"]) )
 
-@app.get("/api/get_api_key_status", response_model=KeyStatusResponse, tags=["設定"], summary="獲取所有API金鑰的設定狀態") # Changed response_model
+@app.get("/api/v1/get_api_key_status", response_model=KeyStatusResponse, tags=["設定"], summary="獲取所有API金鑰的設定狀態") # Changed response_model
 async def get_key_status() -> KeyStatusResponse: # Function name changed and return type hint updated
     """
     獲取在 `backend/config.py` 中定義的所有主要 API 金鑰的設定狀態。
@@ -424,7 +424,7 @@ async def get_key_status() -> KeyStatusResponse: # Function name changed and ret
 # it would be renamed e.g. /api/get_legacy_gemini_key_status and use OriginalApiKeyStatusResponse.
 # For this task, we are replacing it as per instructions to create a NEW endpoint for all keys.
 
-@app.post("/api/set_api_key", response_model=OriginalApiKeyStatusResponse, tags=["設定"], summary="設定 API 金鑰 (僅限 Gemini，舊版端點)") # response_model changed to OriginalApiKeyStatusResponse
+@app.post("/api/v1/set_api_key", response_model=OriginalApiKeyStatusResponse, tags=["設定"], summary="設定 API 金鑰 (僅限 Gemini，舊版端點)") # response_model changed to OriginalApiKeyStatusResponse
 async def set_api_key(payload: ApiKeyRequest):
     """
     設定或更新用於 Google Gemini AI 服務的 API 金鑰。 (此為舊版端點，主要影響 Gemini 金鑰)
@@ -477,7 +477,7 @@ async def set_api_key(payload: ApiKeyRequest):
         logger.error(f"設定 API 金鑰時發生未預期錯誤: {e}", exc_info=True, extra={"props": {"api_endpoint": "/api/set_api_key", "request_id": request_id}})
         raise HTTPException(status_code=500, detail="設定 API 金鑰時發生內部伺服器錯誤。")
 
-@app.post("/api/set_keys", summary="動態設定一個或多個API金鑰", tags=["設定"])
+@app.post("/api/v1/set_keys", summary="動態設定一個或多個API金鑰", tags=["設定"])
 async def set_keys(payload: SetKeysRequest = Body(...)):
     """
     動態設定一個或多個 API 金鑰。
