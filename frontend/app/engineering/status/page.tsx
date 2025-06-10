@@ -15,16 +15,16 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'; // For unknown status
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'; // 用於未知狀態的圖示
 
-// TypeScript Interfaces based on backend Pydantic models
+// 基於後端 Pydantic 模型定義的 TypeScript 介面
 interface ComponentStatus {
   status: string;
   details?: string;
 }
 
 interface SchedulerComponentStatus extends ComponentStatus {
-  next_run_time?: string; // ISO string
+  next_run_time?: string; // ISO 格式的時間字串
 }
 
 interface FilesystemComponentStatus extends ComponentStatus {
@@ -43,13 +43,13 @@ interface VerboseHealthData {
   scheduler_status: SchedulerComponentStatus;
   filesystem_status: FilesystemComponentStatus;
   frontend_service_status: FrontendComponentStatus;
-  timestamp: string; // ISO string
+  timestamp: string; // ISO 格式的時間字串
 }
 
-// Helper to render status chip
+// 用於渲染狀態 Chip 的輔助元件
 const StatusChip: React.FC<{ status: string, details?: string }> = ({ status, details }) => {
   let color: 'success' | 'error' | 'warning' | 'info' | 'default' = 'default';
-  let icon: React.ReactElement | undefined = <HelpOutlineIcon />;
+  let icon: React.ReactElement | undefined = <HelpOutlineIcon />; // 預設為未知狀態圖示
 
   const lowerStatus = status.toLowerCase();
 
@@ -76,56 +76,57 @@ export default function HealthDashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchHealthData = useCallback(async (isManualRefresh = false) => {
-    if (!isManualRefresh) { // Don't show main loading spinner for background refreshes unless it's the first load
+    // 除非是首次加載，否則不要顯示主加載動畫 (用於背景刷新)
+    if (!isManualRefresh) {
         if(healthData === null) setLoading(true);
     } else {
-        setLoading(true); // For manual refresh, always show loading
+        setLoading(true); // 手動刷新時，總是顯示加載動畫
     }
     setError(null);
 
     try {
-      // In a real deployment, this URL might need to be absolute or configured via an environment variable
+      // 在實際部署中，此 URL 可能需要是絕對路徑或通過環境變數配置
       const response = await fetch('/api/health/verbose');
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`獲取健康狀態失敗: ${response.status} ${response.statusText} - ${errorText}`);
+        throw new Error(`獲取健康狀態失敗：${response.status} ${response.statusText} - ${errorText}`);
       }
       const data: VerboseHealthData = await response.json();
       setHealthData(data);
     } catch (e: any) {
-      logger.error(`獲取健康狀態時發生錯誤: ${e.message}`);
-      setError(`獲取健康狀態時發生錯誤: ${e.message}`);
-      // Optionally, clear old data on error or keep it stale
+      logger.error(`獲取健康狀態時發生錯誤：${e.message}`);
+      setError(`獲取健康狀態時發生錯誤：${e.message}`);
+      // 可選：發生錯誤時清除舊數據，或使其保持過時狀態
       // setHealthData(null);
     } finally {
       setLoading(false);
     }
-  }, [healthData]); // healthData in dependency to control initial loading correctly
+  }, [healthData]); // healthData 在依賴項中，以正確控制初始加載
 
   useEffect(() => {
-    fetchHealthData(true); // Initial fetch with loading true
-    const intervalId = setInterval(() => fetchHealthData(false), 10000); // Refresh every 10 seconds
+    fetchHealthData(true); // 初始獲取數據，loading 設為 true
+    const intervalId = setInterval(() => fetchHealthData(false), 10000); // 每 10 秒刷新一次
 
-    return () => clearInterval(intervalId); // Cleanup interval on component unmount
-  }, [fetchHealthData]); // fetchHealthData is memoized with useCallback
+    return () => clearInterval(intervalId); // 組件卸載時清除定時器
+  }, [fetchHealthData]); // fetchHealthData 已使用 useCallback 記憶
 
   const formatTimestamp = (isoString?: string) => {
-    if (!isoString) return 'N/A';
+    if (!isoString) return '不適用';
     try {
       return new Date(isoString).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
     } catch {
-      return isoString; // Return original if parsing fails
+      return isoString; // 如果解析失敗，返回原始字串
     }
   };
 
-  // Client-side logger (optional, for debugging in browser console)
+  // 客戶端日誌記錄器 (可選，用於在瀏覽器控制台中調試)
   const logger = {
-    info: (...args: any[]) => console.log('[HealthDashboard]', ...args),
-    error: (...args: any[]) => console.error('[HealthDashboard]', ...args),
+    info: (...args: any[]) => console.log('[健康儀表板]', ...args),
+    error: (...args: any[]) => console.error('[健康儀表板]', ...args),
   };
 
 
-  if (loading && !healthData) { // Show full page loader only on initial load
+  if (loading && !healthData) { // 僅在初始加載時顯示全頁加載動畫
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
         <CircularProgress size={60} />
@@ -144,7 +145,7 @@ export default function HealthDashboardPage() {
           variant="contained"
           onClick={() => fetchHealthData(true)}
           startIcon={<RefreshIcon />}
-          disabled={loading && healthData !== null} // Disable only if background loading
+          disabled={loading && healthData !== null} // 僅在背景加載時禁用
         >
           {loading && healthData !== null ? '刷新中...' : '手動刷新'}
         </Button>
@@ -173,7 +174,7 @@ export default function HealthDashboardPage() {
           </Grid>
 
           <Grid container spacing={3}>
-            {/* Database Status */}
+            {/* 資料庫狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>
@@ -184,7 +185,7 @@ export default function HealthDashboardPage() {
               </Card>
             </Grid>
 
-            {/* Gemini API Status */}
+            {/* Gemini AI 服務狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>
@@ -195,7 +196,7 @@ export default function HealthDashboardPage() {
               </Card>
             </Grid>
 
-            {/* Google Drive Status */}
+            {/* Google Drive 服務狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>
@@ -206,7 +207,7 @@ export default function HealthDashboardPage() {
               </Card>
             </Grid>
 
-            {/* Scheduler Status */}
+            {/* 排程器狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>
@@ -220,7 +221,7 @@ export default function HealthDashboardPage() {
               </Card>
             </Grid>
 
-            {/* Filesystem Status */}
+            {/* 檔案系統狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>
@@ -232,7 +233,7 @@ export default function HealthDashboardPage() {
               </Card>
             </Grid>
 
-            {/* Frontend Service Status */}
+            {/* 前端服務狀態 */}
             <Grid item xs={12} sm={6} md={4}>
               <Card>
                 <CardContent>

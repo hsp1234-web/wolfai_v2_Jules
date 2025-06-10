@@ -50,13 +50,13 @@ const SettingsCard: React.FC = () => {
         // 嘗試解析錯誤回應體，如果後端有提供 JSON 格式的錯誤細節
         const errorData = await response.json().catch(() => null);
         const errorMessage = errorData?.detail || `HTTP 錯誤 ${response.status}: ${response.statusText}`;
-        throw new Error(`獲取 API 金鑰狀態失敗: ${errorMessage}`);
+        throw new Error(`獲取 API 金鑰狀態失敗：${errorMessage}`);
       }
       const data: ApiKeyStatus = await response.json();
       setApiKeyStatus(data);
     } catch (error) {
-      console.error('獲取 API 金鑰狀態時發生錯誤:', error); // 詳細記錄錯誤到控制台
-      const displayError = error instanceof Error ? error.message : '獲取金鑰狀態時發生未知網路錯誤';
+      console.error('獲取 API 金鑰狀態時發生錯誤 (繁體中文):', error); // 詳細記錄錯誤到控制台
+      const displayError = error instanceof Error ? error.message : '獲取金鑰狀態時發生未知網路錯誤 (繁體中文)';
       setKeyError(displayError);
       // 在發生錯誤時，可以設定一個表示錯誤狀態的 ApiKeyStatus
       setApiKeyStatus({ is_set: false, source: null, drive_service_account_loaded: false });
@@ -87,7 +87,7 @@ const SettingsCard: React.FC = () => {
       if (!response.ok) { // 檢查回應狀態碼
         // 嘗試解析後端返回的 JSON 錯誤訊息
         const errorData = await response.json().catch(() => ({ detail: '設定金鑰失敗，且無法從伺服器解析具體錯誤原因。' }));
-        throw new Error(errorData.detail || `設定金鑰時發生伺服器錯誤: ${response.status} ${response.statusText}`);
+        throw new Error(errorData.detail || `設定金鑰時發生伺服器錯誤：${response.status} ${response.statusText}`);
       }
       // const result: ApiKeyStatus = await response.json(); // 後端 set_api_key 也返回 ApiKeyStatusResponse
       // setApiKeyStatus(result); // 可以用返回的狀態直接更新，或者重新獲取
@@ -95,8 +95,8 @@ const SettingsCard: React.FC = () => {
       await fetchApiKeyStatus(); // 重新獲取金鑰狀態以確認更新
       alert('API 金鑰已成功設定！'); // 簡單提示用戶成功
     } catch (error) {
-      console.error('設定 API 金鑰時發生錯誤:', error);
-      const displayError = error instanceof Error ? error.message : '設定金鑰過程中發生未知網路錯誤';
+      console.error('設定 API 金鑰時發生錯誤 (繁體中文):', error);
+      const displayError = error instanceof Error ? error.message : '設定金鑰過程中發生未知網路錯誤 (繁體中文)';
       setKeyError(displayError);
     } finally {
       setIsSubmittingKey(false); // 結束提交狀態
@@ -127,9 +127,9 @@ const SettingsCard: React.FC = () => {
 
           {apiKeyStatus?.is_set ? ( // 若金鑰已設定，顯示成功提示
             <Alert severity="success" sx={{ mb: 1 }}>
-              Google API 金鑰已設定 (來源: {apiKeyStatus.source === 'environment' ? '環境變數' :
-                                 apiKeyStatus.source === 'user_provided' ? '使用者輸入' :
-                                 apiKeyStatus.source ? apiKeyStatus.source : '未知'})。
+              Google API 金鑰已設定 (來源: {apiKeyStatus.source === 'environment/config' ? '環境/設定檔' :
+                                 apiKeyStatus.source === 'user_input' ? '使用者輸入' :
+                                 apiKeyStatus.source ? apiKeyStatus.source : '未知來源'})。
             </Alert>
           ) : ( // 若金鑰未設定，顯示輸入區域
             <>
@@ -187,7 +187,7 @@ const SettingsCard: React.FC = () => {
 
            {/* 如果金鑰本身已設定，但獲取狀態的過程中有其他非致命錯誤，也提示用戶 */}
            {keyError && apiKeyStatus?.is_set && (
-             <Alert severity="warning" sx={{ mt:1 }}>金鑰狀態資訊可能不完整: {keyError}</Alert>
+             <Alert severity="warning" sx={{ mt:1 }}>金鑰狀態資訊可能不完整：{keyError}</Alert>
            )}
         </Box>
 

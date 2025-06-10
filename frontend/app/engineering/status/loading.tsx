@@ -12,7 +12,7 @@ export default function Loading() {
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        height: '80vh', // Adjust height as needed
+        height: '80vh', // 可依需求調整高度
       }}
     >
       <CircularProgress />
