@@ -6,7 +6,7 @@
     "version": "2.2.0"
   },
   "paths": {
-    "/api/health": {
+    "/api/v1/health": {
       "get": {
         "tags": [
           "健康檢查"
@@ -28,7 +28,7 @@
         }
       }
     },
-    "/api/get_api_key_status": {
+    "/api/v1/get_api_key_status": {
       "get": {
         "tags": [
           "設定"
@@ -50,7 +50,7 @@
         }
       }
     },
-    "/api/set_api_key": {
+    "/api/v1/set_api_key": {
       "post": {
         "tags": [
           "設定"

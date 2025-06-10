@@ -28,7 +28,20 @@ cd frontend
 echo "INFO: 正在安裝前端依賴 (npm install)..."
 npm install
 echo "INFO: 前端依賴安裝完畢。"
-echo "INFO: 正在背景啟動 Next.js 開發伺服器..."
+
+# 檢查端口 3000 是否被佔用
+FRONTEND_PORT=3000
+echo "INFO: 正在檢查端口 $FRONTEND_PORT 是否已被使用..."
+if lsof -i :$FRONTEND_PORT > /dev/null; then
+  echo "❌ 錯誤：端口 $FRONTEND_PORT 已被其他應用程式佔用。"
+  echo "   請停止使用該端口的應用程式，或修改前端的啟動端口後再試。"
+  echo "   (若要修改 Next.js 預設端口，可以嘗試 'npm run dev -- -p <新端口號>')。"
+  exit 1
+else
+  echo "✅ 端口 $FRONTEND_PORT 可用。"
+fi
+
+echo "INFO: 正在背景啟動 Next.js 開發伺服器 (端口 $FRONTEND_PORT)..."
 nohup npm run dev 2>&1 | log_with_timestamp > ../frontend_server.log &
 FRONTEND_PID=$!
 cd ..

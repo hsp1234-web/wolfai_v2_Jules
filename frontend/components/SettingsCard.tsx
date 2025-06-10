@@ -80,7 +80,7 @@ const SettingsCard: React.FC = () => {
     setKeyError(null);
     try {
       // 更新 API 端點
-      const response = await fetch('/api/get_key_status');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/get_key_status`);
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const errorMessage = errorData?.detail || `HTTP 錯誤 ${response.status}: ${response.statusText}`;
@@ -118,7 +118,7 @@ const SettingsCard: React.FC = () => {
     setKeyError(null);
 
     try {
-      const response = await fetch('/api/set_keys', { // 更新 API 端點
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/set_keys`, { // 更新 API 端點
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
