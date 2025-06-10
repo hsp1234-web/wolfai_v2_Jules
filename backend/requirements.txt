@@ -6,3 +6,8 @@ aiosqlite
 fastapi
 uvicorn[standard]
 APScheduler
+google-generativeai
+python-json-logger
+pytest
+pytest-asyncio
+pytest-mock
