@@ -4,10 +4,10 @@ import json
 import httpx # For frontend check
 import pytz # For timezone aware datetime
 from datetime import datetime # For datetime objects
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, APIRouter, Body
 from contextlib import asynccontextmanager # Import from standard library
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr # Added SecretStr
 from typing import Optional, Dict, Any
 from pythonjsonlogger import jsonlogger
 
@@ -47,12 +47,41 @@ class HealthCheckResponse(BaseModel):
     mode: str = Field(default="未知", description="應用程式當前的操作模式 (例如：'transient' 表示暫存模式，'persistent' 表示持久模式)。")
     gemini_status: str = Field(default="未初始化", description="Google Gemini AI 服務的配置和可用性狀態。")
 
-class ApiKeyStatusResponse(BaseModel):
-    """API 金鑰設定狀態的回應模型。"""
+class OriginalApiKeyStatusResponse(BaseModel): # Renamed original ApiKeyStatusResponse
+    """API 金鑰設定狀態的回應模型。 (舊版，涉及單一 Gemini 金鑰)"""
     is_set: bool = Field(..., description="指示 Gemini API 金鑰當前是否已在後端設定（無論是來自環境變數或使用者輸入）。")
     source: Optional[str] = Field(default=None, description="API 金鑰的來源。可能的值：'environment/config'（來自設定檔案或環境變數），'user_input'（由使用者透過 API 設定）。如果金鑰未設定，則為 null。")
     drive_service_account_loaded: bool = Field(..., description="指示 Google Drive 服務帳號金鑰是否已成功從設定中加載並解析。")
     gemini_configured: bool = Field(..., description="指示 Gemini AI 服務當前是否已使用有效的 API 金鑰成功配置。")
+
+class KeyStatusResponse(BaseModel):
+    """通用API金鑰設定狀態的回應模型。"""
+    GOOGLE_API_KEY: str = Field(default="未設定", description="Google Gemini API 金鑰的狀態。")
+    API_KEY_FRED: str = Field(default="未設定", description="用於 FRED 的 API 金鑰狀態。")
+    API_KEY_FINMIND: str = Field(default="未設定", description="用於 FinMind 的 API 金鑰狀態。")
+    API_KEY_FINNHUB: str = Field(default="未設定", description="用於 Finnhub 的 API 金鑰狀態。")
+    API_KEY_FMP: str = Field(default="未設定", description="用於 Financial Modeling Prep 的 API 金鑰狀態。")
+    ALPHA_VANTAGE_API_KEY: str = Field(default="未設定", description="用於 Alpha Vantage 的 API 金鑰狀態。")
+    DEEPSEEK_API_KEY: str = Field(default="未設定", description="用於 DeepSeek 的 API 金鑰狀態。")
+    # 為了兼容性和提供完整資訊，可以選擇性加入舊的特定狀態欄位
+    legacy_gemini_api_key_is_set: Optional[bool] = Field(None, description="[舊版欄位] 指示 Gemini API 金鑰是否已在後端設定。")
+    legacy_gemini_api_key_source: Optional[str] = Field(None, description="[舊版欄位] Gemini API 金鑰的來源。")
+    drive_service_account_loaded: Optional[bool] = Field(None, description="指示 Google Drive 服務帳戶金鑰是否已成功從設定中加載並解析。")
+    gemini_service_configured: Optional[bool] = Field(None, description="指示 Gemini AI 服務當前是否已使用有效的 API 金鑰成功配置。")
+
+class SetKeysRequest(BaseModel):
+    """用於動態設定一個或多個 API 金鑰的請求模型。"""
+    GOOGLE_API_KEY: Optional[str] = Field(None, description="Google Gemini API 金鑰。")
+    API_KEY_FRED: Optional[str] = Field(None, description="FRED API 金鑰。")
+    API_KEY_FINMIND: Optional[str] = Field(None, description="FinMind API 金鑰。")
+    API_KEY_FINNHUB: Optional[str] = Field(None, description="Finnhub API 金鑰。")
+    API_KEY_FMP: Optional[str] = Field(None, description="Financial Modeling Prep API 金鑰。")
+    ALPHA_VANTAGE_API_KEY: Optional[str] = Field(None, description="Alpha Vantage API 金鑰。")
+    DEEPSEEK_API_KEY: Optional[str] = Field(None, description="DeepSeek API 金鑰。")
+    # 注意：不在此處包含 GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT，因其結構複雜且通常透過環境變數設定。
+
+    class Config:
+        extra = "ignore" # 忽略請求中未在模型中定義的額外欄位
 
 class ComponentStatus(BaseModel):
     """詳細健康檢查中單個應用程式組件的狀態模型。"""
@@ -111,17 +140,18 @@ async def lifespan(app: FastAPI):
     logger.info("JSON Logger 已配置。後端應用程式啟動中...")
     app_state["operation_mode"] = settings.OPERATION_MODE
     logger.info(f"偵測到操作模式: {app_state['operation_mode']}", extra={"props": {"operation_mode": app_state['operation_mode']}})
-    if settings.COLAB_GOOGLE_API_KEY:
-        api_key_value = settings.COLAB_GOOGLE_API_KEY.get_secret_value()
+    # 更新金鑰讀取邏輯以使用 GOOGLE_API_KEY (來自 config.py 的更改)
+    if settings.GOOGLE_API_KEY: # Changed from COLAB_GOOGLE_API_KEY
+        api_key_value = settings.GOOGLE_API_KEY.get_secret_value()
         if api_key_value:
-            app_state["google_api_key"] = api_key_value
+            app_state["google_api_key"] = api_key_value # This state is used by GeminiService internally
             app_state["google_api_key_source"] = "environment/config"
-            logger.info("COLAB_GOOGLE_API_KEY 已從設定成功加載。", extra={"props": {"source": "environment/config"}})
+            logger.info("GOOGLE_API_KEY 已從設定成功加載。", extra={"props": {"source": "environment/config"}}) # Log message updated
         else:
-            logger.warning("設定中的 COLAB_GOOGLE_API_KEY 為空值。Gemini 功能可能受限。", extra={"props": {"config_issue": "empty_api_key"}})
+            logger.warning("設定中的 GOOGLE_API_KEY 為空值。Gemini 功能可能受限。", extra={"props": {"config_issue": "empty_api_key"}}) # Log message updated
             app_state["google_api_key_source"] = "environment/config (空值)"
     else:
-        logger.warning("設定中未找到 COLAB_GOOGLE_API_KEY。Gemini 功能可能受限。", extra={"props": {"config_issue": "missing_api_key"}})
+        logger.warning("設定中未找到 GOOGLE_API_KEY。Gemini 功能可能受限。", extra={"props": {"config_issue": "missing_api_key"}}) # Log message updated
     if settings.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT:
         sa_content_str = settings.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT.get_secret_value()
         if sa_content_str:
@@ -353,29 +383,51 @@ async def verbose_health_check():
         filesystem_status=FilesystemComponentStatus(**statuses["filesystem_status"]),
         frontend_service_status=FrontendComponentStatus(**statuses["frontend_service_status"]) )
 
-@app.get("/api/get_api_key_status", response_model=ApiKeyStatusResponse, tags=["設定"], summary="獲取 API 金鑰設定狀態")
-async def get_api_key_status():
+@app.get("/api/get_api_key_status", response_model=KeyStatusResponse, tags=["設定"], summary="獲取所有API金鑰的設定狀態") # Changed response_model
+async def get_key_status() -> KeyStatusResponse: # Function name changed and return type hint updated
     """
-    獲取當前 API 金鑰的設定狀態。
+    獲取在 `backend/config.py` 中定義的所有主要 API 金鑰的設定狀態。
 
-    此端點返回 Gemini API 金鑰是否已設定、其來源（環境變數或使用者輸入）、
-    Google Drive 服務帳號是否已加載，以及 Gemini 服務是否已成功配置。
+    返回一個 JSON 物件，其中每個金鑰對應一個字串，說明其狀態 ("已設定" 或 "未設定")。
+    同時也包含應用程式內部使用的 Gemini 金鑰狀態及 Drive 服務帳號狀態。
     """
-    try:
-        gemini_service_instance = app_state.get("gemini_service")
-        gemini_configured_status = gemini_service_instance.is_configured if gemini_service_instance else False
-        return ApiKeyStatusResponse(
-            is_set=bool(app_state.get("google_api_key")), source=app_state.get("google_api_key_source"),
-            drive_service_account_loaded=bool(app_state.get("service_account_info")),
-            gemini_configured=gemini_configured_status )
-    except Exception as e:
-        logger.error(f"獲取 API 金鑰狀態時發生未預期錯誤: {e}", exc_info=True, extra={"props": {"api_endpoint": "/api/get_api_key_status"}})
-        raise HTTPException(status_code=500, detail="獲取 API 金鑰狀態時發生內部伺服器錯誤。")
+    key_statuses_dict: Dict[str, Any] = {}
 
-@app.post("/api/set_api_key", response_model=ApiKeyStatusResponse, tags=["設定"], summary="設定 API 金鑰")
+    # List of API keys to check from settings
+    # These names must match the attribute names in backend/config.py's Settings class
+    api_key_names = [
+        "GOOGLE_API_KEY", "API_KEY_FRED", "API_KEY_FINMIND",
+        "API_KEY_FINNHUB", "API_KEY_FMP", "ALPHA_VANTAGE_API_KEY",
+        "DEEPSEEK_API_KEY"
+    ]
+
+    for key_name in api_key_names:
+        key_value: Optional[SecretStr] = getattr(settings, key_name, None)
+        if key_value and key_value.get_secret_value(): # Check if SecretStr has a value
+            key_statuses_dict[key_name] = "已設定"
+        else:
+            key_statuses_dict[key_name] = "未設定"
+
+    # Add other relevant statuses from app_state for completeness in the new response model
+    gemini_service_instance = app_state.get("gemini_service")
+    gemini_configured_status = gemini_service_instance.is_configured if gemini_service_instance else False
+
+    key_statuses_dict["legacy_gemini_api_key_is_set"] = bool(app_state.get("google_api_key"))
+    key_statuses_dict["legacy_gemini_api_key_source"] = app_state.get("google_api_key_source")
+    key_statuses_dict["drive_service_account_loaded"] = bool(app_state.get("service_account_info"))
+    key_statuses_dict["gemini_service_configured"] = gemini_configured_status
+
+    return KeyStatusResponse(**key_statuses_dict)
+
+# The original /api/get_api_key_status is now effectively replaced by /api/get_key_status.
+# If strict preservation of the old endpoint with its exact old model is needed,
+# it would be renamed e.g. /api/get_legacy_gemini_key_status and use OriginalApiKeyStatusResponse.
+# For this task, we are replacing it as per instructions to create a NEW endpoint for all keys.
+
+@app.post("/api/set_api_key", response_model=OriginalApiKeyStatusResponse, tags=["設定"], summary="設定 API 金鑰 (僅限 Gemini，舊版端點)") # response_model changed to OriginalApiKeyStatusResponse
 async def set_api_key(payload: ApiKeyRequest):
     """
-    設定或更新用於 Google Gemini AI 服務的 API 金鑰。
+    設定或更新用於 Google Gemini AI 服務的 API 金鑰。 (此為舊版端點，主要影響 Gemini 金鑰)
 
     使用者可以通過此端點在運行時提供 API 金鑰。
     提交的金鑰將被暫存，並用於重新配置 Gemini 服務。
@@ -411,12 +463,87 @@ async def set_api_key(payload: ApiKeyRequest):
             logger.error(f"使用新 API 金鑰重新配置 GeminiService 時失敗: {e_reconfig}", exc_info=True, extra={"props": {"request_id": request_id, "reconfig_status": "failure", "error": str(e_reconfig)}})
             # 即使重新配置失敗，也返回當前狀態，讓客戶端知道金鑰已設定但可能無效
 
-        return await get_api_key_status() # 返回更新後的金鑰狀態
+        # Construct and return the OriginalApiKeyStatusResponse
+        # This part needs to fetch the state as the old endpoint would have.
+        return OriginalApiKeyStatusResponse(
+            is_set=bool(app_state.get("google_api_key")),
+            source=app_state.get("google_api_key_source"),
+            drive_service_account_loaded=bool(app_state.get("service_account_info")),
+            gemini_configured=gemini_service_instance.is_configured # Use the updated status
+        )
     except HTTPException as http_exc: # 重新引發已知的 HTTP 異常
         raise http_exc
     except Exception as e: # 捕獲其他所有未預期錯誤
         logger.error(f"設定 API 金鑰時發生未預期錯誤: {e}", exc_info=True, extra={"props": {"api_endpoint": "/api/set_api_key", "request_id": request_id}})
         raise HTTPException(status_code=500, detail="設定 API 金鑰時發生內部伺服器錯誤。")
+
+@app.post("/api/set_keys", summary="動態設定一個或多個API金鑰", tags=["設定"])
+async def set_keys(payload: SetKeysRequest = Body(...)):
+    """
+    動態設定一個或多個 API 金鑰。
+    提交的任何金鑰都將更新應用程式的環境變數和運行時設定。
+    如果為某個金鑰提供的值為 null 或空字串，則會嘗試清除該金鑰的設定。
+
+    **注意：** 更改某些金鑰（如 `GOOGLE_API_KEY`）後，相關服務（如 `GeminiService`）
+    的行為可能會在下一次使用時才反映更新後的金鑰，這取決於服務的實例管理和初始化方式。
+    對於 `GeminiService`，由於其在 `app_state` 中通常作為單例存在，並且金鑰在 `__init__` 時配置，
+    因此直接修改 `settings` 物件後，若要使現有 `GeminiService` 實例立即使用新金鑰，
+    可能需要額外的重新配置步驟或重新啟動服務。
+    當前實現會更新 `settings`，這將影響後續新創建的 `GeminiService` 實例。
+    對於 `app_state` 中管理的 `GeminiService` 實例，如果 `GOOGLE_API_KEY` 發生變化，
+    `genai.configure` 會被調用，`is_configured` 狀態也會更新。
+    """
+    updated_keys = []
+    request_id = os.urandom(8).hex()
+    logger.info(f"接收到 /api/set_keys 請求 (ID: {request_id})", extra={"props": {"api_endpoint": "/api/set_keys", "request_id": request_id, "payload": payload.model_dump_json(exclude_none=True)}})
+
+    for key_name, value in payload.model_dump(exclude_none=False).items(): # Use exclude_none=False to iterate even if value is None
+        # 只處理 Settings 中實際定義的 API 金鑰 (且為 SecretStr 類型)
+        if hasattr(settings, key_name) and isinstance(getattr(settings, key_name, None), (SecretStr, type(None))):
+            if value is not None: # 值被提供了 (包括空字串)
+                os.environ[key_name] = value
+                setattr(settings, key_name, SecretStr(value) if value else None)
+                logger.info(f"API 金鑰 '{key_name}' 已在環境變數和設定中更新。", extra={"props": {"request_id": request_id, "key_name": key_name, "action": "updated" if value else "cleared"}})
+                if key_name == "GOOGLE_API_KEY": # 特別處理 Gemini 金鑰的即時重配置
+                    app_state["google_api_key"] = value if value else None
+                    app_state["google_api_key_source"] = "user_input (set_keys)"
+                    gemini_service_instance = app_state.get("gemini_service")
+                    if gemini_service_instance:
+                        try:
+                            if value:
+                                genai.configure(api_key=value)
+                                gemini_service_instance.is_configured = True
+                                logger.info(f"GeminiService 已使用新的 GOOGLE_API_KEY 重新配置。", extra={"props": {"request_id": request_id, "reconfig_status": "success"}})
+                            else:
+                                # 如果金鑰被清空，理想情況下應使 genai 不再使用任何金鑰，
+                                # 但 genai 庫可能沒有直接的 "unconfigure" 方法。
+                                # 將 is_configured 設為 False 是關鍵。
+                                gemini_service_instance.is_configured = False
+                                logger.info(f"GOOGLE_API_KEY 已被清除，GeminiService 標記為未配置。", extra={"props": {"request_id": request_id, "reconfig_status": "cleared"}})
+                        except Exception as e_reconfig:
+                            gemini_service_instance.is_configured = False
+                            logger.error(f"使用新的 GOOGLE_API_KEY 重新配置 GeminiService 時失敗: {e_reconfig}", exc_info=True, extra={"props": {"request_id": request_id, "reconfig_status": "failure", "error": str(e_reconfig)}})
+                updated_keys.append(key_name)
+            elif hasattr(settings, key_name) and getattr(settings, key_name) is not None : # payload 中 key 為 None，但 settings 中有值，表示要清除
+                if key_name in os.environ:
+                    del os.environ[key_name]
+                setattr(settings, key_name, None)
+                logger.info(f"API 金鑰 '{key_name}' 已從環境變數和設定中清除。", extra={"props": {"request_id": request_id, "key_name": key_name, "action": "explicitly_cleared"}})
+                if key_name == "GOOGLE_API_KEY": # 同樣處理 Gemini
+                    app_state["google_api_key"] = None
+                    app_state["google_api_key_source"] = "user_input (set_keys_cleared)"
+                    gemini_service_instance = app_state.get("gemini_service")
+                    if gemini_service_instance:
+                        gemini_service_instance.is_configured = False
+                        logger.info(f"GOOGLE_API_KEY 已被清除，GeminiService 標記為未配置。", extra={"props": {"request_id": request_id, "reconfig_status": "cleared_on_none"}})
+                updated_keys.append(key_name)
+
+
+    if not updated_keys:
+        logger.info(f"未提供任何有效金鑰進行更新 (請求 ID: {request_id})", extra={"props": {"request_id": request_id, "action": "no_valid_keys_provided"}})
+        return JSONResponse(status_code=200, content={"message": "未提供任何有效金鑰進行更新。請確保金鑰名稱正確且在允許的列表中。", "updated_keys": updated_keys})
+
+    return JSONResponse(status_code=200, content={"message": f"API 金鑰已處理。受影響的金鑰: {', '.join(updated_keys)}", "updated_keys": updated_keys})
 
 app.openapi_tags = [
     {"name": "健康檢查", "description": "應用程式健康狀態相關端點。"},
