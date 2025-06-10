@@ -86,7 +86,7 @@ export default function HealthDashboardPage() {
 
     try {
       // 在實際部署中，此 URL 可能需要是絕對路徑或通過環境變數配置
-      const response = await fetch('/api/v1/health/verbose');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/health/verbose`);
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`獲取健康狀態失敗：${response.status} ${response.statusText} - ${errorText}`);
