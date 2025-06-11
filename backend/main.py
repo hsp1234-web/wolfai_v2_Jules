@@ -445,7 +445,11 @@ async def set_api_key(payload: ApiKeyRequest):
         # 更新應用程式狀態中的 API 金鑰及其來源
         app_state["google_api_key"] = payload.api_key
         app_state["google_api_key_source"] = "user_input"
-        logger.info(f"Google API Key 已透過 API 暫存於 app_state。", extra={"props": {"request_id": request_id, "source": "user_input"}})
+
+        # Also update os.environ and the global settings object
+        os.environ["GOOGLE_API_KEY"] = payload.api_key
+        settings.GOOGLE_API_KEY = SecretStr(payload.api_key)
+        logger.info(f"GOOGLE_API_KEY 已在 os.environ 和 settings 中更新，並暫存於 app_state。", extra={"props": {"request_id": request_id, "source": "user_input"}})
 
         gemini_service_instance = app_state.get("gemini_service")
         if not gemini_service_instance:
