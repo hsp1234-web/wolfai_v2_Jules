@@ -1,11 +1,10 @@
 google-api-python-client
-google-auth-httplib2
 google-auth-oauthlib
 aiogoogle
 aiosqlite
 fastapi
 uvicorn[standard]
-APScheduler
+APScheduler~=3.10.4 # Pinned to stable 3.x series, as 4.x is in pre-release
 google-generativeai
 python-json-logger
 pytest
