@@ -1,13 +1,49 @@
-// 'use client'; // 如果此頁面僅渲染客戶端元件，則 page.tsx 可以保持為伺服器元件。
-// 如果有互動邏輯直接在此頁面，則需要取消註解 'use client'。
+'use client';
 
+import { useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+import Button from '@mui/material/Button';
 import SettingsCard from '../components/SettingsCard'; // 使用相對路徑導入 SettingsCard 元件
 import Container from '@mui/material/Container'; // MUI 容器元件，用於限制最大寬度並居中內容
 
 // 導出預設的 HomePage 元件
 export default function HomePage() {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleGenerateReport = async () => {
+    setLoading(true);
+    setReport(null); // Clear previous report
+    try {
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/reports/generate`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        // Add headers if required by the API, e.g., Content-Type
+        // headers: {
+        //   'Content-Type': 'application/json',
+        // },
+        // Add body if required by the API
+        // body: JSON.stringify({ /* your payload here */ }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setReport(data);
+      } else {
+        console.error('Failed to generate report:', response.status, response.statusText);
+        // Optionally, set an error state here to display to the user
+        // For example: setError(`Error: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Error during report generation:', error);
+      // Optionally, set an error state here
+      // For example: setError(`Error: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     // 使用 Container 元件包裹頁面內容，設定最大寬度為 'lg'
     <Container maxWidth="lg">
@@ -33,6 +69,25 @@ export default function HomePage() {
         {/* 渲染 SettingsCard 元件 */}
         <SettingsCard />
 
+        {/* 生成報告按鈕 */}
+        <Button
+          variant="contained"
+          onClick={handleGenerateReport}
+          disabled={loading}
+          sx={{ mt: 2 }} // 上邊距 (margin top)
+        >
+          {loading ? '報告生成中...' : '生成深度策略分析報告'}
+        </Button>
+
+        {/* 顯示報告內容 */}
+        {report && (
+          <Box sx={{ mt: 4, width: '100%' }}>
+            <Typography variant="h5" component="h2" gutterBottom>
+              分析報告:
+            </Typography>
+            <pre>{JSON.stringify(report, null, 2)}</pre>
+          </Box>
+        )}
       </Box>
     </Container>
   );
