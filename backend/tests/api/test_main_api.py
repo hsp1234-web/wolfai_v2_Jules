@@ -437,67 +437,131 @@ def test_set_keys_no_valid_keys_provided(client: TestClient, mocker):
     assert data["message"] == "未提供任何有效金鑰進行更新。請確保金鑰名稱正確且在允許的列表中。"
     assert len(data["updated_keys"]) == 0
 
-# --- Tests for /api/v1/reports/generate ---
+# --- Tests for /api/v1/reports/generate (Updated for Gemini Integration) ---
 
-def test_generate_report_success(client: TestClient):
-    mock_report_data = {
-        "summary": "Mocked Report Summary from Test",
-        "status": "success",
-        "data_dimensions_received": ["dim1", "dim2"],
-        "details": {"dim1": "針對 dim1 的分析結果：一切正常。", "dim2": "針對 dim2 的分析結果：一切正常。"}
-    }
-    # Patching the method in the location it's imported and used in main.py
-    # backend.main imports 'from services.analysis_service import AnalysisService'
-    # then instantiates it. So we patch it where the class is defined.
-    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
-        mock_generate.return_value = mock_report_data
+def test_generate_report_success_gemini(client: TestClient):
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
+        # Configure the mock model instance
+        mock_model_instance = MagicMock()
+        mock_model_instance.model_name = "gemini-pro-mocked"
 
-        response = client.post("/api/v1/reports/generate",
-                               json={"data_dimensions": ["dim1", "dim2"]})
+        # Configure the response from generate_content
+        mock_gemini_response = MagicMock()
+        mock_gemini_response.parts = [MagicMock(text="Mocked AI analysis text.")]
+        mock_gemini_response.text = "Mocked AI analysis text." # Fallback if parts isn't primary
+        mock_gemini_response.prompt_feedback = MagicMock(block_reason=None)
 
-        assert response.status_code == 200, f"Response: {response.text}"
-        assert response.json() == mock_report_data
-        mock_generate.assert_called_once_with(["dim1", "dim2"])
+        mock_model_instance.generate_content.return_value = mock_gemini_response
+        mock_generative_model_class.return_value = mock_model_instance
 
-def test_generate_report_empty_dimensions(client: TestClient):
-    mock_report_data = {
-        "summary": "綜合分析報告 - AI狼計畫 (無維度)",
-        "status": "partial_success",
-        "data_dimensions_received": [],
-        "details": {"general": "未提供分析維度，無法生成詳細報告。"}
-    }
-    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
-        mock_generate.return_value = mock_report_data
-
-        response = client.post("/api/v1/reports/generate",
-                               json={"data_dimensions": []})
+        request_payload = {"data_dimensions": ["經濟數據", "市場新聞"]}
+        response = client.post("/api/v1/reports/generate", json=request_payload)
 
         assert response.status_code == 200, f"Response: {response.text}"
-        assert response.json() == mock_report_data
-        mock_generate.assert_called_once_with([])
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert data["summary"] == "由 Gemini AI 生成的綜合分析報告"
+        assert data["analysis_details"] == "Mocked AI analysis text."
+        assert data["model_used"] == "gemini-pro-mocked"
+        assert data["data_dimensions_processed"] == ["經濟數據", "市場新聞"]
+        assert "prompt_sent_to_gemini" in data
+
+        mock_generative_model_class.assert_called_once_with('gemini-pro')
+        mock_model_instance.generate_content.assert_called_once()
+        # You could add more specific assertions about the prompt if needed:
+        # called_prompt = mock_model_instance.generate_content.call_args[0][0]
+        # assert "經濟數據" in called_prompt
+        # assert "市場新聞" in called_prompt
+
+def test_generate_report_empty_dimensions_gemini(client: TestClient):
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
+        mock_model_instance = MagicMock()
+        mock_generative_model_class.return_value = mock_model_instance
+
+        response = client.post("/api/v1/reports/generate", json={"data_dimensions": []})
+
+        assert response.status_code == 200, f"Response: {response.text}"
+        data = response.json()
+
+        assert data["status"] == "skipped_ai_call"
+        assert data["details"] == "未提供分析維度，無法調用 AI 分析。"
+        assert data["model_used"] is None
+        assert data["prompt_sent_to_gemini"] is None
+
+        mock_model_instance.generate_content.assert_not_called()
+
+def test_generate_report_gemini_api_error(client: TestClient):
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
+        mock_model_instance = MagicMock()
+        mock_model_instance.model_name = "gemini-pro-mocked-for-error"
+        mock_model_instance.generate_content.side_effect = Exception("Simulated Gemini API Failure from test")
+        mock_generative_model_class.return_value = mock_model_instance
+
+        request_payload = {"data_dimensions": ["technical_glitch"]}
+        response = client.post("/api/v1/reports/generate", json=request_payload)
+
+        assert response.status_code == 200 # Service handles the exception and returns JSON
+        data = response.json()
+
+        assert data["status"] == "error_calling_ai"
+        assert "Simulated Gemini API Failure" in data["error_message"]
+        assert data["summary"] == "調用 Gemini AI 時發生錯誤"
+        assert data["model_used"] == "gemini-pro" # Default model name in case of error before/during call
+
+        mock_model_instance.generate_content.assert_called_once()
+
+def test_generate_report_gemini_prompt_blocked(client: TestClient):
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
+        mock_model_instance = MagicMock()
+        mock_model_instance.model_name = "gemini-pro-mocked-blocked"
+
+        mock_gemini_response = MagicMock()
+        mock_gemini_response.parts = [] # No content parts
+        mock_gemini_response.text = ""   # No direct text
+
+        # Simulate a blocked prompt
+        # The service code now accesses prompt_feedback.block_reason.name
+        mock_block_reason = MagicMock()
+        mock_block_reason.name = "SAFETY" # .name is important as per service code
+        mock_gemini_response.prompt_feedback = MagicMock(block_reason=mock_block_reason)
+
+        mock_model_instance.generate_content.return_value = mock_gemini_response
+        mock_generative_model_class.return_value = mock_model_instance
+
+        request_payload = {"data_dimensions": ["controversial_topic"]}
+        response = client.post("/api/v1/reports/generate", json=request_payload)
+
+        assert response.status_code == 200, f"Response: {response.text}"
+        data = response.json()
+
+        # As per service logic: status is "success", but details explain the block.
+        assert data["status"] == "success"
+        assert "AI content generation was blocked" in data["analysis_details"]
+        assert "Reason: SAFETY" in data["analysis_details"]
+        assert data["model_used"] == "gemini-pro-mocked-blocked"
+
+        mock_model_instance.generate_content.assert_called_once()
+
+# --- Invalid Payload Tests (should remain unchanged as they test FastAPI/Pydantic validation) ---
 
 def test_generate_report_invalid_payload_string_instead_of_list(client: TestClient):
-    # AnalysisService should not be called if payload validation fails
-    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+    # This test ensures that if the AnalysisService.generate_report was called directly
+    # it would not be, because Pydantic validation fails first.
+    # So, we don't need to mock the genai.GenerativeModel here as it won't be reached.
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
         response = client.post("/api/v1/reports/generate",
                                json={"data_dimensions": "not_a_list"}) # Invalid payload
         assert response.status_code == 422 # Unprocessable Entity
-        mock_generate.assert_not_called()
+        mock_generative_model_class.assert_not_called() # Service's Gemini model should not be initialized
 
 def test_generate_report_invalid_payload_missing_field(client: TestClient):
-    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+    with patch('backend.services.analysis_service.genai.GenerativeModel') as mock_generative_model_class:
         response = client.post("/api/v1/reports/generate",
                                json={"some_other_field": ["dim1"]}) # Missing data_dimensions
         assert response.status_code == 422 # Unprocessable Entity
-        mock_generate.assert_not_called()
+        mock_generative_model_class.assert_not_called() # Service's Gemini model should not be initialized
 
-def test_generate_report_service_exception(client: TestClient):
-    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
-        mock_generate.side_effect = Exception("Simulated service error")
-
-        response = client.post("/api/v1/reports/generate",
-                               json={"data_dimensions": ["dim1"]})
-
-        assert response.status_code == 500
-        assert "Simulated service error" in response.json()["detail"]
-        mock_generate.assert_called_once_with(["dim1"])
+# Old test_generate_report_service_exception is removed as its functionality is covered by
+# test_generate_report_gemini_api_error and test_generate_report_gemini_prompt_blocked
+# which are more specific to the Gemini integration.
