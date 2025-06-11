@@ -1,3 +1,4 @@
+import asyncio # Added for asyncio.Lock
 import aiosqlite
 import logging
 import os
@@ -49,6 +50,7 @@ class DataAccessLayer:
         self.reports_db_path = reports_db_path
         self.prompts_db_path = prompts_db_path
         self._connections = {} # Store persistent connections for :memory: DBs
+        self._memory_db_locks: Dict[str, asyncio.Lock] = {} # Locks for in-memory DB connections
         logger.info(
             f"DataAccessLayer 配置使用報告資料庫於: '{self.reports_db_path}' 及提示詞資料庫於: '{self.prompts_db_path}'.",
             extra={"props": {"service_name": "DataAccessLayer", "status": "configured", "reports_db": reports_db_path, "prompts_db": prompts_db_path}}
@@ -68,12 +70,19 @@ class DataAccessLayer:
         Returns:
             aiosqlite.Connection: 配置好的 aiosqlite 資料庫連接物件。
         """
+        # Potential Race Condition: When using the same in-memory database (db_path == ":memory:")
+        # across multiple concurrent tasks with the same DAL instance, the same aiosqlite.Connection
+        # object is shared. Without a lock, concurrent operations (transactions, writes, schema changes)
+        # on this shared connection can lead to errors like "database is locked" or inconsistent states.
+        # 建議：為每個記憶體資料庫路徑創建一個 asyncio.Lock。在對該記憶體資料庫執行任何操作之前，
+        # 應獲取相應的鎖，以確保對共享連接的操作是序列化的。
         if db_path == ":memory:":
             if db_path not in self._connections:
-                logger.info(f"為 '{db_path}' 建立新的 :memory: 連接並設定 row_factory。")
+                logger.info(f"為 '{db_path}' 建立新的 :memory: 連接、對應的鎖 (lock) 並設定 row_factory。")
                 conn = await aiosqlite.connect(db_path)
                 conn.row_factory = aiosqlite.Row
                 self._connections[db_path] = conn
+                self._memory_db_locks[db_path] = asyncio.Lock() # Create lock for this new in-memory DB
             # Ensure row_factory is set even for existing connections if it wasn't (e.g. defensive)
             elif self._connections[db_path].row_factory is None:
                  self._connections[db_path].row_factory = aiosqlite.Row
@@ -142,27 +151,65 @@ class DataAccessLayer:
             db_conn_to_use: Optional[aiosqlite.Connection] = None
 
             if is_memory_db:
-                db_conn_to_use = await self._get_connection(db_path) # Get or create persistent :memory: connection
-                # For :memory: connections, we manage them and don't use 'async with' here to close them.
-                cursor = await db_conn_to_use.execute(query, params)
-                if commit:
-                    await db_conn_to_use.commit()
-                    if query.strip().upper().startswith("INSERT"):
-                        id_cursor = await db_conn_to_use.execute("SELECT last_insert_rowid()")
-                        last_id_row = await id_cursor.fetchone()
-                        await id_cursor.close()
-                        return last_id_row[0] if last_id_row else None
-                    return cursor.rowcount
-                if fetch_one:
-                    result = await cursor.fetchone()
+                # Potential Race Condition: Accessing the shared in-memory connection concurrently.
+                # A lock specific to this db_path is acquired to serialize operations.
+                # 建議：在對共享的記憶體資料庫連接執行任何操作（如 execute, commit, fetch）之前，
+                # 應獲取先前為此 db_path 創建的 asyncio.Lock。
+                # 這確保了即使有多個異步任務嘗試同時操作同一個記憶體資料庫，
+                # 這些操作也會被序列化，避免了潛在的衝突和狀態不一致。
+                lock = self._memory_db_locks.get(db_path)
+                if not lock:
+                    # This should ideally not happen if _get_connection correctly creates a lock
+                    # when a new in-memory connection is established.
+                    logger.error(f"嚴重錯誤：找不到用於記憶體資料庫 '{db_path}' 的鎖。查詢將在無鎖狀態下執行，可能導致問題。")
+                    # Fallback: proceed without lock, or raise an exception. For now, logging and proceeding.
+                    # Consider raising an error here for stricter safety in a production system.
+
+                # Acquire the lock if it exists
+                if lock:
+                    async with lock:
+                        db_conn_to_use = await self._get_connection(db_path) # Get or create persistent :memory: connection
+                        # For :memory: connections, we manage them and don't use 'async with' here to close them.
+                        cursor = await db_conn_to_use.execute(query, params)
+                        if commit:
+                            await db_conn_to_use.commit()
+                            if query.strip().upper().startswith("INSERT"):
+                                id_cursor = await db_conn_to_use.execute("SELECT last_insert_rowid()")
+                                last_id_row = await id_cursor.fetchone()
+                                await id_cursor.close()
+                                return last_id_row[0] if last_id_row else None
+                            return cursor.rowcount
+                        if fetch_one:
+                            result = await cursor.fetchone()
+                            await cursor.close()
+                            return result
+                        if fetch_all:
+                            result = await cursor.fetchall()
+                            await cursor.close()
+                            return result
+                        await cursor.close()
+                        return None
+                else: # Lock was not found, proceed without it (with error already logged)
+                    db_conn_to_use = await self._get_connection(db_path)
+                    cursor = await db_conn_to_use.execute(query, params)
+                    if commit:
+                        await db_conn_to_use.commit()
+                        if query.strip().upper().startswith("INSERT"):
+                            id_cursor = await db_conn_to_use.execute("SELECT last_insert_rowid()")
+                            last_id_row = await id_cursor.fetchone()
+                            await id_cursor.close()
+                            return last_id_row[0] if last_id_row else None
+                        return cursor.rowcount
+                    if fetch_one:
+                        result = await cursor.fetchone()
+                        await cursor.close()
+                        return result
+                    if fetch_all:
+                        result = await cursor.fetchall()
+                        await cursor.close()
+                        return result
                     await cursor.close()
-                    return result
-                if fetch_all:
-                    result = await cursor.fetchall()
-                    await cursor.close()
-                    return result
-                await cursor.close()
-                return None
+                    return None
             else: # File-based DB, create a new connection and use async with for its management
                 async with aiosqlite.connect(db_path) as db_file_conn:
                     db_file_conn.row_factory = aiosqlite.Row # Ensure row_factory is set
