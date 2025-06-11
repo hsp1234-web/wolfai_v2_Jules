@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import SettingsCard from '../components/SettingsCard'; // 使用相對路徑導入 SettingsCard 元件
 import Container from '@mui/material/Container'; // MUI 容器元件，用於限制最大寬度並居中內容
+import ReportTabs from '../components/ReportTabs'; // Adjust path if necessary
 
 // 導出預設的 HomePage 元件
 export default function HomePage() {
@@ -82,10 +83,12 @@ export default function HomePage() {
         {/* 顯示報告內容 */}
         {report && (
           <Box sx={{ mt: 4, width: '100%' }}>
-            <Typography variant="h5" component="h2" gutterBottom>
+            {/* Typography for the section title can be kept or removed based on how ReportTabs itself handles titles */}
+            {/* For instance, if ReportTabs has its own main title, this Typography might be redundant */}
+            {/* <Typography variant="h5" component="h2" gutterBottom>
               分析報告:
-            </Typography>
-            <pre>{JSON.stringify(report, null, 2)}</pre>
+            </Typography> */}
+            <ReportTabs report={report} />
           </Box>
         )}
       </Box>
