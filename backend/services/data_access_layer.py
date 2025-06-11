@@ -139,18 +139,20 @@ class DataAccessLayer:
             # Get connection: for :memory:, it's persistent; for files, it's new and managed by async with
             is_memory_db = (db_path == ":memory:")
 
+            db_conn_to_use: Optional[aiosqlite.Connection] = None
+
             if is_memory_db:
-                conn = await self._get_connection(db_path) # Get or create persistent connection
-                # Execute directly on the persistent connection
-                cursor = await conn.execute(query, params)
+                db_conn_to_use = await self._get_connection(db_path) # Get or create persistent :memory: connection
+                # For :memory: connections, we manage them and don't use 'async with' here to close them.
+                cursor = await db_conn_to_use.execute(query, params)
                 if commit:
-                    await conn.commit()
+                    await db_conn_to_use.commit()
                     if query.strip().upper().startswith("INSERT"):
-                        id_cursor = await conn.execute("SELECT last_insert_rowid()")
+                        id_cursor = await db_conn_to_use.execute("SELECT last_insert_rowid()")
                         last_id_row = await id_cursor.fetchone()
                         await id_cursor.close()
                         return last_id_row[0] if last_id_row else None
-                    return cursor.rowcount # For UPDATE/DELETE, return number of affected rows
+                    return cursor.rowcount
                 if fetch_one:
                     result = await cursor.fetchone()
                     await cursor.close()
@@ -161,8 +163,9 @@ class DataAccessLayer:
                     return result
                 await cursor.close()
                 return None
-            else: # File-based DB, use async with for connection management
-                async with await self._get_connection(db_path) as db_file_conn:
+            else: # File-based DB, create a new connection and use async with for its management
+                async with aiosqlite.connect(db_path) as db_file_conn:
+                    db_file_conn.row_factory = aiosqlite.Row # Ensure row_factory is set
                     cursor = await db_file_conn.execute(query, params)
                     if commit:
                         await db_file_conn.commit()
