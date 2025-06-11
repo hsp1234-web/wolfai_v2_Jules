@@ -2,23 +2,49 @@ import aiosqlite
 import logging
 import os
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
+
+# aiosqlite is already imported at the top of the file by the first import aiosqlite statement.
+# No need for a second import here. We can use aiosqlite.Connection directly.
 
 logger = logging.getLogger(__name__)
 
 class DataAccessLayer:
     """
     資料存取層 (DataAccessLayer) 類別。
-    負責應用程式與 SQLite 資料庫之間的所有互動，包括資料的儲存、查詢和管理。
-    它管理兩種主要的資料實體：報告 (reports) 和提示詞範本 (prompt_templates)。
+
+    本類別封裝了所有對 SQLite 資料庫的非同步操作，用於管理「報告」和「提示詞範本」
+    兩種核心資料實體。它提供了結構化的 API 來執行 CRUD (建立、讀取、更新、刪除)
+    操作，同時處理資料庫連接、查詢執行、錯誤記錄和目錄創建等底層細節。
+
+    主要職責:
+    - 初始化資料庫結構 (建立資料表)。
+    - 管理資料庫連接，特別是對記憶體資料庫 (`:memory:`) 的持久連接。
+    - 提供插入、查詢、更新和檢查報告資料的方法。
+    - 提供插入、查詢提示詞範本的方法。
+    - 統一的錯誤處理和日誌記錄機制。
+
+    設計考量:
+    - 使用 `aiosqlite` 進行非同步資料庫操作，適用於異步應用程式 (如 FastAPI)。
+    - 對於記憶體資料庫，會維護一個共享連接以確保資料在操作間的持久性。
+    - 對於檔案型資料庫，每次操作會建立新的連接，並透過 `async with` 管理其生命週期。
+    - 方法返回型別和參數均經過型別提示，以提高程式碼清晰度和可維護性。
     """
-    def __init__(self, reports_db_path: str, prompts_db_path: str):
-        """
-        初始化 DataAccessLayer。
+    reports_db_path: str
+    prompts_db_path: str
+    _connections: Dict[str, aiosqlite.Connection]
+
+    def __init__(self, reports_db_path: str, prompts_db_path: str) -> None:
+        """初始化 DataAccessLayer 實例。
+
+        設定報告資料庫和提示詞範本資料庫的路徑，並初始化用於管理
+        記憶體資料庫連接的內部字典。
 
         Args:
             reports_db_path (str): 報告資料庫的檔案路徑。
+                                   若為 ":memory:"，則使用記憶體資料庫。
             prompts_db_path (str): 提示詞範本資料庫的檔案路徑。
+                                   若為 ":memory:"，則使用記憶體資料庫。
         """
         self.reports_db_path = reports_db_path
         self.prompts_db_path = prompts_db_path
@@ -29,12 +55,20 @@ class DataAccessLayer:
         )
 
     async def _get_connection(self, db_path: str) -> aiosqlite.Connection:
+        """取得並配置一個資料庫連接。
+
+        如果 `db_path` 是 ":memory:"，此方法會返回一個持久的記憶體資料庫連接。
+        如果該連接尚不存在，則會創建一個新的連接，設定其 `row_factory` 為 `aiosqlite.Row`
+        以便按欄位名稱存取結果，並將其儲存以供後續重用。
+        對於檔案型資料庫，每次調用都會建立一個新的連接，並設定 `row_factory`。
+
+        Args:
+            db_path (str): 目標資料庫的路徑。
+
+        Returns:
+            aiosqlite.Connection: 配置好的 aiosqlite 資料庫連接物件。
         """
-        獲取資料庫連接。
-        對於 :memory: 資料庫，它會重用現有的連接或創建一個新的持久連接。
-        對於文件型資料庫，它總是在調用此方法時返回一個新的連接（由 _execute_query 中的 async with 管理）。
-        """
-        if db_path == ":memory:": # Simplified: assumes any ":memory:" is the same if paths match
+        if db_path == ":memory:":
             if db_path not in self._connections:
                 logger.info(f"為 '{db_path}' 建立新的 :memory: 連接並設定 row_factory。")
                 conn = await aiosqlite.connect(db_path)
@@ -49,21 +83,48 @@ class DataAccessLayer:
             conn.row_factory = aiosqlite.Row # Set row_factory for file connections too
             return conn
 
-    async def close_connections(self):
-        """關閉所有由 DAL 管理的持久化 :memory: 連接。"""
+    async def close_connections(self) -> None:
+        """關閉所有由 DAL 管理的持久化 :memory: 資料庫連接。
+
+        此方法會迭代內部儲存的記憶體資料庫連接，並逐一關閉它們。
+        主要用於測試結束後的資源清理。
+        """
         for db_path, conn in self._connections.items():
             if conn:
                 await conn.close()
                 logger.info(f"已關閉 :memory: 資料庫 '{db_path}' 的連接。")
         self._connections.clear()
 
-    async def _execute_query(self, db_path: str, query: str, params: tuple = (), fetch_one=False, fetch_all=False, commit=False):
+    async def _execute_query(self, db_path: str, query: str, params: Tuple[Any, ...] = (), fetch_one: bool = False, fetch_all: bool = False, commit: bool = False) -> Optional[Any]:
+        """內部輔助方法，用於執行 SQL 查詢並處理連接。
+
+        此方法負責實際的資料庫互動。它會根據 `db_path` 的類型（記憶體或檔案）
+        獲取相應的資料庫連接。對於檔案型資料庫，它會確保目標目錄存在。
+        它能夠執行查詢、提取單筆或多筆結果，提交事務，並在 INSERT 操作後返回
+        新插入行的 ID，或在 UPDATE/DELETE 操作後返回受影響的行數。
+
+        Args:
+            db_path (str): 目標資料庫的檔案路徑 (或 ":memory:")。
+            query (str): 要執行的 SQL 查詢語句。
+            params (Tuple, optional): 查詢的參數。預設為空元組。
+            fetch_one (bool, optional): 若為 True，則提取查詢結果的第一行。預設為 False。
+            fetch_all (bool, optional): 若為 True，則提取查詢結果的所有行。預設為 False。
+            commit (bool, optional): 若為 True，則在執行查詢後提交事務。
+                                     對於 INSERT，返回 last_row_id；對於 UPDATE/DELETE，返回 rowcount。
+                                     預設為 False。
+
+        Returns:
+            Optional[Any]: 查詢的結果。
+                           - INSERT 且 commit: 返回 `int` 型別的 last_row_id。
+                           - UPDATE/DELETE 且 commit: 返回 `int` 型別的受影響行數 (rowcount)。
+                           - SELECT 且 fetch_one: 返回 `aiosqlite.Row` 物件或 `None`。
+                           - SELECT 且 fetch_all: 返回 `List[aiosqlite.Row]` 或空列表。
+                           - 其他情況 (如 DDL 且 commit) 返回 `None`。
+
+        Raises:
+            aiosqlite.Error: 如果在資料庫操作過程中發生錯誤，底層的 `aiosqlite` 異常會被記錄並重新引發。
         """
-        執行一個 SQL 查詢。
-        (詳細註解同前，但修改了連接處理方式)
-        """
-        # For file-based DBs, ensure directory exists
-        if db_path != ":memory:":
+        if db_path != ":memory:": # For file-based DBs, ensure directory exists
             db_dir = os.path.dirname(db_path)
             if db_dir and not os.path.exists(db_dir):
                 try:
@@ -130,20 +191,23 @@ class DataAccessLayer:
             raise
         # Note: Persistent :memory: connections are not closed here; they are closed via self.close_connections()
 
-    async def initialize_databases(self):
-        """
-        初始化所有必要的資料庫和表。
-        對於 :memory: 資料庫，這也會首次建立並儲存連接。
-        如果表已存在，則此操作不會產生任何影響。
+    async def initialize_databases(self) -> None:
+        """初始化所有配置的資料庫和必要的資料表。
+
+        此方法會依次調用內部方法來創建 `reports` 和 `prompt_templates` 資料表。
+        如果資料表已經存在，則相應的 `CREATE TABLE IF NOT EXISTS` 語句不會執行任何操作。
+        對於記憶體資料庫，此過程也確保了相關連接已建立並儲存。
         """
         await self._create_reports_table()
         await self._create_prompts_table()
         logger.info("資料庫初始化完成 (如果需要)。", extra={"props": {"operation": "initialize_databases", "status": "completed"}})
 
-    async def _create_reports_table(self):
-        """
-        在報告資料庫中創建 'reports' 表 (如果它尚不存在)。
-        該表用於儲存已處理報告的相關資訊。
+    async def _create_reports_table(self) -> None:
+        """在報告資料庫中創建 `reports` 資料表。
+
+        此表用於儲存已處理報告的資訊，包括原始檔名、內容、來源路徑、
+        處理時間戳、狀態、元數據及 AI 分析結果。
+        如果資料表已存在，則不會重複創建。
         """
         query = """
         CREATE TABLE IF NOT EXISTS reports (
@@ -164,10 +228,12 @@ class DataAccessLayer:
         await self._execute_query(self.reports_db_path, query, commit=True)
         logger.info(f"'reports' 表已在 '{self.reports_db_path}' 中確認/創建。", extra={"props": {"db_table": "reports", "db_path": self.reports_db_path}})
 
-    async def _create_prompts_table(self):
-        """
-        在提示詞資料庫中創建 'prompt_templates' 表 (如果它尚不存在)。
-        該表用於儲存使用者定義的提示詞範本。
+    async def _create_prompts_table(self) -> None:
+        """在提示詞資料庫中創建 `prompt_templates` 資料表。
+
+        此表用於儲存使用者定義的提示詞範本，包含範本名稱、內容、類別以及時間戳。
+        範本名稱具有唯一性約束。
+        如果資料表已存在，則不會重複創建。
         """
         query = """
         CREATE TABLE IF NOT EXISTS prompt_templates (
@@ -188,18 +254,22 @@ class DataAccessLayer:
     async def insert_report_data(self, original_filename: str, content: Optional[str],
                                  source_path: str, metadata: Optional[Dict[str, Any]] = None,
                                  status: str = '已擷取待處理') -> Optional[int]:
-        """
-        將新的報告資料插入到 'reports' 資料庫。
+        """將新的報告資料插入到 `reports` 資料庫。
+
+        此方法會將提供的報告資訊（包括原始檔名、文本內容、來源路徑、
+        可選的元數據和狀態）儲存到報告資料庫中。元數據會被序列化為 JSON 字串進行儲存。
+        成功插入後，將返回新記錄的 ID。如果發生資料庫錯誤，則記錄錯誤並返回 None。
 
         Args:
             original_filename (str): 報告的原始檔案名稱。
-            content (Optional[str]): 報告的文本內容 (可能為 None，如果內容尚未提取或不適用)。
-            source_path (str): 報告的來源路徑 (例如，在 Google Drive 中的路徑)。
-            metadata (Optional[Dict[str, Any]], optional): 關於報告的附加元數據 (JSON 可序列化字典)。預設為 None。
-            status (str, optional): 報告的初始狀態。預設為 '已擷取待處理'。
+            content (Optional[str]): 報告的文本內容。若無內容則可為 None。
+            source_path (str): 報告的來源路徑，例如在 Google Drive 中的完整路徑。
+            metadata (Optional[Dict[str, Any]], optional): 包含報告附加資訊的字典，
+                                                          必須可序列化為 JSON。預設為 None。
+            status (str, optional): 報告的初始處理狀態。預設為 '已擷取待處理'。
 
         Returns:
-            Optional[int]: 如果插入成功，返回新報告的 ID；否則返回 None。
+            Optional[int]: 若插入成功，則返回新報告的整數 ID；若發生錯誤，則返回 None。
         """
         metadata_str = json.dumps(metadata, ensure_ascii=False) if metadata else None
         query = "INSERT INTO reports (original_filename, content, source_path, metadata, status) VALUES (?, ?, ?, ?, ?)"
@@ -221,15 +291,18 @@ class DataAccessLayer:
             return None
 
     async def get_report_by_id(self, report_id: int) -> Optional[Dict[str, Any]]:
-        """
-        根據指定的 ID 從資料庫中檢索單個報告。
+        """根據指定的 ID 從報告資料庫中檢索單個報告的詳細資訊。
+
+        執行 SQL 查詢以獲取具有給定 ID 的報告。如果找到報告，
+        結果 `aiosqlite.Row` 物件會被轉換為字典並返回。
+        如果未找到報告或發生資料庫查詢錯誤，則記錄錯誤並返回 None。
 
         Args:
-            report_id (int): 要檢索的報告的 ID。
+            report_id (int): 要檢索的報告的整數 ID。
 
         Returns:
-            Optional[Dict[str, Any]]: 如果找到報告，則返回包含報告資料的字典 (欄位名作為鍵)；
-                                     否則返回 None。
+            Optional[Dict[str, Any]]: 如果找到報告，則返回一個包含報告所有欄位資料的字典；
+                                     若未找到或發生錯誤，則返回 None。
         """
         query = "SELECT id, original_filename, content, source_path, processed_at, status, metadata, analysis_json FROM reports WHERE id = ?"
         log_props = {"report_id": report_id, "operation": "get_report_by_id"}
@@ -247,16 +320,25 @@ class DataAccessLayer:
             return None
 
     async def update_report_status(self, report_id: int, status: str, processed_content: Optional[str] = None) -> bool:
-        """
-        更新指定報告的狀態，並可選擇性地更新其處理後的內容。
+        """更新資料庫中指定報告的狀態，並可選擇性地更新其處理後的內容。
+
+        此方法會根據提供的 `report_id` 更新報告的 `status` 欄位。
+        如果同時提供了 `processed_content`，則報告的 `content` 欄位也會被更新。
+        `processed_at` 時間戳將自動更新為目前時間。
+        如果更新操作影響了至少一行 (即報告被找到且值被改變)，則返回 True。
+        如果報告未找到或未發生實際更新 (例如，狀態和內容與現有值相同)，或發生資料庫錯誤，
+        則記錄相應訊息並返回 False。
 
         Args:
-            report_id (int): 要更新的報告的 ID。
-            status (str): 報告的新狀態。
-            processed_content (Optional[str], optional): 報告處理後的文本內容。如果為 None，則不更新內容。預設為 None。
+            report_id (int): 要更新狀態的報告的 ID。
+            status (str): 要設定給報告的新狀態。
+            processed_content (Optional[str], optional): 報告處理後的更新文本內容。
+                                                      如果為 None，則不更新 `content` 欄位。
+                                                      預設為 None。
 
         Returns:
-            bool: 如果更新成功，返回 True；否則返回 False。
+            bool: 如果報告狀態和/或內容成功更新 (至少一行受影響)，則返回 True；
+                  否則返回 False。
         """
         fields_to_update = {"status": status}
         if processed_content is not None:
@@ -288,16 +370,21 @@ class DataAccessLayer:
             return False
 
     async def update_report_analysis(self, report_id: int, analysis_data: str, status: str) -> bool:
-        """
-        更新指定報告的 AI 分析結果 (JSON 字串) 和狀態。
+        """更新指定報告的 AI 分析結果 (JSON 字串) 和處理狀態。
+
+        此方法將提供的 `analysis_data` (應為 JSON 字串) 和新的 `status`
+        儲存到具有給定 `report_id` 的報告記錄中。`processed_at` 時間戳會自動更新。
+        如果更新操作影響了至少一行，則返回 True。
+        如果報告未找到，或發生資料庫錯誤，則記錄錯誤並返回 False。
 
         Args:
-            report_id (int): 要更新的報告的 ID。
+            report_id (int): 要更新分析結果的報告的 ID。
             analysis_data (str): AI 分析結果的 JSON 字串表示。
             status (str): 報告在分析後的新狀態 (例如，'分析完成', '分析失敗')。
 
         Returns:
-            bool: 如果更新成功，返回 True；否則返回 False。
+            bool: 如果分析結果和狀態成功更新 (至少一行受影響)，則返回 True；
+                  否則返回 False。
         """
         query = "UPDATE reports SET analysis_json = ?, status = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?"
         log_props = {"report_id": report_id, "new_status": status, "operation": "update_report_analysis"}
@@ -323,19 +410,27 @@ class DataAccessLayer:
             return False
 
     async def update_report_metadata(self, report_id: int, metadata_update: Dict[str, Any]) -> bool:
-        """
-        更新指定報告的元數據。
-        它會獲取現有的元數據，將其與 `metadata_update` 合併，然後寫回資料庫。
+        """安全地更新指定報告的元數據。
+
+        此方法首先獲取報告的現有元數據 (如果存在)，然後將 `metadata_update` 中的鍵值對
+        合併到現有元數據中 (新的值會覆蓋舊的值)。更新後的完整元數據將被序列化為 JSON
+        字串並寫回資料庫。`processed_at` 時間戳也會更新。
+
+        如果報告不存在 (由 `get_report_by_id` 判斷)，或者在解析現有元數據 (如果格式損壞)
+        或執行資料庫更新時發生錯誤，則操作失敗並返回 False。
+        如果元數據成功更新 (即使沒有實際的欄位更改，例如更新的值與原值相同)，也返回 True。
 
         Args:
             report_id (int): 要更新元數據的報告的 ID。
-            metadata_update (Dict[str, Any]): 包含要更新或添加的元數據鍵值對的字典。
+            metadata_update (Dict[str, Any]): 一個字典，包含要添加或更新的元數據。
+                                              此字典的內容將與報告現有的元數據合併。
 
         Returns:
-            bool: 如果元數據更新成功，返回 True；否則返回 False (例如，報告不存在或資料庫錯誤)。
+            bool: 如果元數據成功設定或更新，則返回 True。
+                  如果報告未找到，或在處理/儲存元數據時發生錯誤，則返回 False。
         """
         log_props = {"report_id": report_id, "operation": "update_report_metadata"}
-        current_report = await self.get_report_by_id(report_id) # get_report_by_id logs its own errors
+        current_report = await self.get_report_by_id(report_id)
         if not current_report:
             logger.error(f"更新 metadata 失敗：找不到報告 ID {report_id}。", extra={"props": {**log_props, "error": "report_not_found"}})
             return False
@@ -380,16 +475,17 @@ class DataAccessLayer:
             return False
 
     async def check_report_exists_by_source_path(self, source_path: str) -> bool:
-        """
-        根據來源路徑檢查報告是否已存在於資料庫中。
-        用於防止重複處理相同的報告。
+        """根據來源路徑檢查報告是否已存在於資料庫中。
+
+        此方法用於在處理新報告前，透過其唯一的 `source_path`（例如檔案在雲端儲存中的路徑）
+        來判斷該報告是否已經被登錄到資料庫中，以避免重複處理。
 
         Args:
             source_path (str): 要檢查的報告的來源路徑。
 
         Returns:
-            bool: 如果具有相同 source_path 的報告已存在，則返回 True；否則返回 False。
-                  如果在檢查過程中發生錯誤，也可能返回 False (並記錄錯誤)。
+            bool: 如果具有相同 `source_path` 的報告已存在於資料庫中，則返回 True；
+                  否則返回 False。如果在查詢過程中發生錯誤，也會記錄錯誤並返回 False。
         """
         query = "SELECT 1 FROM reports WHERE source_path = ? LIMIT 1"
         try:
@@ -397,19 +493,22 @@ class DataAccessLayer:
             return result is not None
         except Exception as e:
             logger.error(f"檢查報告是否存在 (source_path: {source_path}) 時失敗: {e}", exc_info=True, extra={"props": {"source_path": source_path, "operation": "check_report_exists", "error": str(e)}})
-            return False # Or re-raise depending on desired strictness
+            return False
 
     async def insert_prompt_template(self, name: str, template_text: str, category: Optional[str] = None) -> Optional[int]:
-        """
-        將新的提示詞範本插入到 'prompt_templates' 資料庫。
+        """將新的提示詞範本插入到 `prompt_templates` 資料庫。
+
+        此方法儲存一個新的提示詞範本，包括其唯一名稱、範本內容和可選的類別。
+        `name` 欄位在資料庫中有唯一性約束。如果嘗試插入同名範本，操作將失敗。
+        成功插入後返回新範本的 ID。若發生錯誤 (例如違反唯一性約束)，則記錄錯誤並返回 None。
 
         Args:
-            name (str): 提示詞範本的唯一名稱。
-            template_text (str): 提示詞範本的內容。
-            category (Optional[str], optional): 提示詞範本的類別。預設為 None。
+            name (str): 提示詞範本的唯一識別名稱。
+            template_text (str): 提示詞範本的實際內容文字。
+            category (Optional[str], optional): 提示詞範本的分類。預設為 None。
 
         Returns:
-            Optional[int]: 如果插入成功，返回新提示詞範本的 ID；否則返回 None。
+            Optional[int]: 若插入成功，則返回新提示詞範本的整數 ID；若發生錯誤，則返回 None。
         """
         query = "INSERT INTO prompt_templates (name, template_text, category) VALUES (?, ?, ?)"
         log_props = {"prompt_name": name, "category": category, "operation": "insert_prompt_template"}
@@ -434,15 +533,18 @@ class DataAccessLayer:
     # ... (rest of the DAL, including prompt methods and __main__ test block, remains largely unchanged for logging 'extra') ...
     # ... (get_prompt_template_by_name and get_all_prompt_templates will benefit from _execute_query's error logging) ...
     async def get_prompt_template_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """
-        根據名稱從資料庫中檢索單個提示詞範本。
+        """根據名稱從提示詞範本資料庫中檢索單個提示詞範本。
+
+        執行 SQL 查詢以獲取具有給定唯一名稱的提示詞範本。
+        如果找到，結果 `aiosqlite.Row` 物件會被轉換為字典並返回。
+        如果未找到或發生資料庫錯誤，則記錄錯誤並返回 None。
 
         Args:
-            name (str): 要檢索的提示詞範本的名稱。
+            name (str): 要檢索的提示詞範本的唯一名稱。
 
         Returns:
-            Optional[Dict[str, Any]]: 如果找到範本，則返回包含範本資料的字典；否則返回 None。
-                                     字典鍵對應於 'prompt_templates' 表的欄位名。
+            Optional[Dict[str, Any]]: 如果找到範本，則返回包含其所有欄位資料的字典；
+                                     若未找到或發生錯誤，則返回 None。
         """
         query = "SELECT id, name, template_text, category, created_at, updated_at FROM prompt_templates WHERE name = ?"
         log_props = {"prompt_name": name, "operation": "get_prompt_template_by_name"}
@@ -459,19 +561,25 @@ class DataAccessLayer:
             return None
 
     async def get_all_prompt_templates(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """
-        從資料庫中檢索所有提示詞範本的列表，支持分頁。
+        """從資料庫中檢索所有提示詞範本的列表，支持分頁和排序。
+
+        此方法查詢 `prompt_templates` 表，按範本名稱升序 (`name ASC`) 排序，
+        並使用 `limit` 和 `offset` 參數來實現分頁。
+        返回的列表中，每個範本是一個字典，僅包含 'id', 'name', 'category', 'updated_at' 欄位，
+        不包含完整的 `template_text`，以提高效能。
+        如果查詢成功但無結果，則返回空列表。若發生資料庫錯誤，則記錄錯誤並返回空列表。
 
         Args:
             limit (int, optional): 要檢索的最大範本數量。預設為 100。
-            offset (int, optional): 開始檢索的偏移量 (用於分頁)。預設為 0。
+            offset (int, optional): 結果集的起始偏移量，用於分頁。預設為 0。
 
         Returns:
-            List[Dict[str, Any]]: 包含提示詞範本資料字典的列表。
+            List[Dict[str, Any]]: 包含提示詞範本資料的字典列表。每個字典包含：
+                                  'id' (int), 'name' (str), 'category' (Optional[str]),
+                                  'updated_at' (str/datetime)。
                                   如果沒有找到範本或發生錯誤，則返回空列表。
-                                  列表中的每個字典包含 'id', 'name', 'category', 'updated_at' 欄位。
         """
-        query = "SELECT id, name, category, updated_at FROM prompt_templates ORDER BY name ASC LIMIT ? OFFSET ?" # Changed order to name ASC for consistency with test
+        query = "SELECT id, name, category, updated_at FROM prompt_templates ORDER BY name ASC LIMIT ? OFFSET ?"
         log_props = {"limit": limit, "offset": offset, "operation": "get_all_prompt_templates"}
         try:
             rows = await self._execute_query(self.prompts_db_path, query, (limit, offset), fetch_all=True)
@@ -496,11 +604,22 @@ if __name__ == '__main__':
     # 但未在 DataAccessLayer 類中定義。為了使測試代碼完整，這裡模擬一個。
     # 實際應用中，應將此方法正式添加到 DataAccessLayer 類中。
 
-    async def get_all_reports_for_testing(dal_instance, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-        """
-        (僅為測試目的的輔助函數)
-        從資料庫檢索報告列表，支持分頁。
-        在實際應用中，此方法應為 DataAccessLayer 類的一部分。
+    async def get_all_reports_for_testing(dal_instance: DataAccessLayer, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """(僅為 __main__ 區塊測試目的的輔助函數) 從資料庫檢索報告列表，支持分頁。
+
+        注意: 此函數是為 `if __name__ == '__main__':` 中的臨時測試而設計，
+        並未作為 `DataAccessLayer` 類別的正式方法。
+        它示範了如何連接到報告資料庫並按 `processed_at` 時間降序檢索報告的部分欄位。
+
+        Args:
+            dal_instance (DataAccessLayer): `DataAccessLayer` 的一個實例，用於獲取報告資料庫路徑。
+            limit (int, optional): 要檢索的最大報告數量。預設為 10。
+            offset (int, optional): 結果集的起始偏移量。預設為 0。
+
+        Returns:
+            List[Dict[str, Any]]: 包含報告資料的字典列表。每個字典包含 'id',
+                                  'original_filename', 'status', 'processed_at', 'source_path'。
+                                  錯誤時返回空列表。
         """
         query = "SELECT id, original_filename, status, processed_at, source_path FROM reports ORDER BY processed_at DESC LIMIT ? OFFSET ?"
         try:
@@ -522,7 +641,14 @@ if __name__ == '__main__':
     test_prompts_db = os.path.join(data_dir, 'test_prompts.sqlite')
     if os.path.exists(test_reports_db): os.remove(test_reports_db)
     if os.path.exists(test_prompts_db): os.remove(test_prompts_db)
-    async def main():
+    async def main() -> None:
+        """此主函數用於在直接執行此腳本時，對 DataAccessLayer 的功能進行基本測試。
+
+        它會建立測試用的 SQLite 資料庫檔案，初始化 DataAccessLayer，
+        執行一系列的資料插入和更新操作，並打印結果到控制台。
+        測試完成後，會提示測試資料庫檔案的路徑。
+        注意：此函數主要用於開發和基本驗證，並非正式的單元測試套件。
+        """
         dal = DataAccessLayer(reports_db_path=test_reports_db, prompts_db_path=test_prompts_db)
         logger.info("---- 開始 DataAccessLayer 功能測試 (包含 analysis_json) ----")
         await dal.initialize_databases()
