@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 import os
 from pydantic import SecretStr
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch # Added patch
 
 from backend.main import app, app_state
 from backend.config import settings, Settings # Import Settings for re-initialization if needed for some tests
@@ -436,3 +436,68 @@ def test_set_keys_no_valid_keys_provided(client: TestClient, mocker):
     data = response.json()
     assert data["message"] == "未提供任何有效金鑰進行更新。請確保金鑰名稱正確且在允許的列表中。"
     assert len(data["updated_keys"]) == 0
+
+# --- Tests for /api/v1/reports/generate ---
+
+def test_generate_report_success(client: TestClient):
+    mock_report_data = {
+        "summary": "Mocked Report Summary from Test",
+        "status": "success",
+        "data_dimensions_received": ["dim1", "dim2"],
+        "details": {"dim1": "針對 dim1 的分析結果：一切正常。", "dim2": "針對 dim2 的分析結果：一切正常。"}
+    }
+    # Patching the method in the location it's imported and used in main.py
+    # backend.main imports 'from services.analysis_service import AnalysisService'
+    # then instantiates it. So we patch it where the class is defined.
+    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+        mock_generate.return_value = mock_report_data
+
+        response = client.post("/api/v1/reports/generate",
+                               json={"data_dimensions": ["dim1", "dim2"]})
+
+        assert response.status_code == 200, f"Response: {response.text}"
+        assert response.json() == mock_report_data
+        mock_generate.assert_called_once_with(["dim1", "dim2"])
+
+def test_generate_report_empty_dimensions(client: TestClient):
+    mock_report_data = {
+        "summary": "綜合分析報告 - AI狼計畫 (無維度)",
+        "status": "partial_success",
+        "data_dimensions_received": [],
+        "details": {"general": "未提供分析維度，無法生成詳細報告。"}
+    }
+    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+        mock_generate.return_value = mock_report_data
+
+        response = client.post("/api/v1/reports/generate",
+                               json={"data_dimensions": []})
+
+        assert response.status_code == 200, f"Response: {response.text}"
+        assert response.json() == mock_report_data
+        mock_generate.assert_called_once_with([])
+
+def test_generate_report_invalid_payload_string_instead_of_list(client: TestClient):
+    # AnalysisService should not be called if payload validation fails
+    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+        response = client.post("/api/v1/reports/generate",
+                               json={"data_dimensions": "not_a_list"}) # Invalid payload
+        assert response.status_code == 422 # Unprocessable Entity
+        mock_generate.assert_not_called()
+
+def test_generate_report_invalid_payload_missing_field(client: TestClient):
+    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+        response = client.post("/api/v1/reports/generate",
+                               json={"some_other_field": ["dim1"]}) # Missing data_dimensions
+        assert response.status_code == 422 # Unprocessable Entity
+        mock_generate.assert_not_called()
+
+def test_generate_report_service_exception(client: TestClient):
+    with patch('backend.services.analysis_service.AnalysisService.generate_report') as mock_generate:
+        mock_generate.side_effect = Exception("Simulated service error")
+
+        response = client.post("/api/v1/reports/generate",
+                               json={"data_dimensions": ["dim1"]})
+
+        assert response.status_code == 500
+        assert "Simulated service error" in response.json()["detail"]
+        mock_generate.assert_called_once_with(["dim1"])

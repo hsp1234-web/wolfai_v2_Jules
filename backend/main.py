@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Header, APIRouter, Body
 from contextlib import asynccontextmanager # Import from standard library
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, SecretStr # Added SecretStr
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List # Added List
 from pythonjsonlogger import jsonlogger
 
 import google.generativeai as genai
@@ -19,6 +19,7 @@ from .services.data_access_layer import DataAccessLayer
 from .services.parsing_service import ParsingService
 from .services.gemini_service import GeminiService
 from .services.report_ingestion_service import ReportIngestionService
+from .services.analysis_service import AnalysisService # Added AnalysisService
 from .scheduler_tasks import trigger_report_ingestion_task
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,10 @@ class SetKeysRequest(BaseModel):
 
     class Config:
         extra = "ignore" # 忽略請求中未在模型中定義的額外欄位
+
+class ReportRequest(BaseModel):
+    """用於請求生成分析報告的模型。"""
+    data_dimensions: List[str] = Field(..., description="用於生成報告的數據維度列表。")
 
 class ComponentStatus(BaseModel):
     """詳細健康檢查中單個應用程式組件的狀態模型。"""
@@ -549,10 +554,43 @@ async def set_keys(payload: SetKeysRequest = Body(...)):
 
     return JSONResponse(status_code=200, content={"message": f"API 金鑰已處理。受影響的金鑰: {', '.join(updated_keys)}", "updated_keys": updated_keys})
 
+@app.post("/api/v1/reports/generate", tags=["報告分析"], summary="根據指定維度生成分析報告")
+async def generate_report_endpoint(request: ReportRequest):
+    """
+    根據提供的數據維度列表生成綜合分析報告。
+
+    此端點接收一個包含 `data_dimensions` 列表的請求體。
+    後端將使用 `AnalysisService` 來處理這些維度並生成一份模擬的分析報告。
+    """
+    request_id = os.urandom(8).hex()
+    logger.info(
+        f"接收到生成報告請求 (ID: {request_id})",
+        extra={"props": {"api_endpoint": "/api/v1/reports/generate", "request_id": request_id, "data_dimensions": request.data_dimensions}}
+    )
+    try:
+        # 在實際應用中, AnalysisService 可能會透過依賴注入 (FastAPI Depends) 來管理
+        # 這有助於管理服務的生命週期和依賴關係 (例如 DataAccessLayer)
+        analysis_service = AnalysisService() # 直接實例化服務
+        report = analysis_service.generate_report(request.data_dimensions)
+        logger.info(
+            f"報告已成功生成 (請求 ID: {request_id})",
+            extra={"props": {"request_id": request_id, "report_summary": report.get("summary"), "status": report.get("status")}}
+        )
+        return report
+    except Exception as e:
+        logger.error(
+            f"生成報告時發生錯誤 (請求 ID: {request_id}): {e}",
+            exc_info=True, # 包含堆疊追蹤
+            extra={"props": {"api_endpoint": "/api/v1/reports/generate", "request_id": request_id, "error": str(e)}}
+        )
+        # 返回一個標準化的錯誤回應
+        raise HTTPException(status_code=500, detail=f"生成報告時發生內部伺服器錯誤: {str(e)}")
+
 app.openapi_tags = [
     {"name": "健康檢查", "description": "應用程式健康狀態相關端點。"},
     {"name": "通用操作", "description": "提供應用程式基本資訊或通用功能的端點。"},
     {"name": "設定", "description": "與應用程式設定相關的 API 端點。"},
+    {"name": "報告分析", "description": "與生成和管理分析報告相關的端點。"}, # Added new tag
 ]
 
 if __name__ == "__main__":
