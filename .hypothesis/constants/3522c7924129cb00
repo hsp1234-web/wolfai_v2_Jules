@@ -1,0 +1,4 @@
+# file: /app/backend/services/analysis_service.py
+# hypothesis_version: 6.135.6
+
+['AI服務返回結果格式不符預期', 'AnalysisService', 'analysis_details', 'data_dimensions', 'error_calling_ai', 'error_message', 'error_unknown', 'event', 'model_name', 'model_used', 'props', 'reason', 'service', 'skipped_ai_call', 'status', 'success', 'summary', 'unexpected_error', '未提供分析維度，無法調用 AI 分析。', '生成報告時發生未知錯誤', '由 AI 生成的綜合分析報告', '綜合分析報告 - AI狼計畫 (無維度)', '調用 AI 服務時發生錯誤']

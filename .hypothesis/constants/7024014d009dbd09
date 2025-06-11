@@ -1,0 +1,4 @@
+# file: /app/backend/services/gemini_service.py
+# hypothesis_version: 6.135.6
+
+['GeminiService', 'ValueError', '```', '```json', 'analyze_report', 'api_action', 'api_call_status', 'api_key_empty', 'api_key_missing', 'attempt', 'block_reason', 'blocked', 'configuration_status', 'error', 'error_type', 'exception', 'final_status', 'gemini-pro', 'input_length', 'json_cleaning_issue', 'json_decode_error', 'max_retries', 'max_retries_api_fail', 'max_retries_reached', 'model_name', 'no_content', 'prompt_length', 'props', 'raw_response_text', 'response', 'retry_delay_seconds', 'service_name', 'started', 'starting', 'success', 'summarize_text', 'summary_length', 'text', '{', '}', '報告分析請求最終失敗 (迴圈結束異常)。', '已達到最大重試次數，報告分析失敗。', '已達到最大重試次數，文字摘要失敗。', '成功從 Gemini API 獲取摘要。', '文字摘要請求最終失敗 (迴圈結束異常)。', '輸入提示文字為空，無法進行分析。', '輸入文字為空，無法進行摘要。']
