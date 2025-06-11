@@ -1,0 +1,4 @@
+# file: /app/backend/config.py
+# hypothesis_version: 6.135.6
+
+['"', "'", '.env', '15', 'API_KEY_FINMIND', 'API_KEY_FINNHUB', 'API_KEY_FMP', 'API_KEY_FRED', 'DEEPSEEK_API_KEY', 'GOOGLE_API_KEY', 'OPERATION_MODE', 'PROMPTS_DB_PATH', 'REPORTS_DB_PATH', 'WOLF_IN_FOLDER_ID', 'transient', 'utf-8', '排程器執行的時間間隔（分鐘）']

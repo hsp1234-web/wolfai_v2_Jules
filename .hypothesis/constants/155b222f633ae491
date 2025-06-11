@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/httplib2/socks.py
+# hypothesis_version: 6.135.6
+
+[b':', 200, 255, 443, 1080, 8080, ' HTTP/1.1\r\n', '%s http://%s%s %s', '0.0.0.0', ':', ': ', '>BBH', '>H', 'BBB', 'BBBB', 'CONNECT ', 'Connection refused', 'HTTP/1.0', 'HTTP/1.1', 'Host unreachable', 'Host: ', 'Host: %s', 'Network unreachable', 'TTL expired', 'Unknown error', 'bad input', 'bad proxy type', 'get', 'host', 'host:', 'invalid data', 'no proxy specified', 'not available', 'not connected', 'post', 'proxy-authorization', 'request granted', 'socket', 'succeeded', 'success', 'unknown error']

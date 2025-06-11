@@ -3,12 +3,47 @@ import logging
 import time
 import asyncio
 import json
-from typing import Optional, Dict, Any # Added Any
+from typing import Optional, Dict, Any
 
 import google.generativeai as genai
+from google.generativeai.types import generation_types # For error handling if needed
+
 from ..config import settings
 
 logger = logging.getLogger(__name__)
+
+# Custom Exceptions
+class GeminiServiceError(Exception):
+    """Base exception for GeminiService issues."""
+    pass
+
+class GeminiNotConfiguredError(GeminiServiceError):
+    """Raised when the service is not configured (e.g., API key missing)."""
+    pass
+
+class GeminiAPIError(GeminiServiceError):
+    """Raised for errors returned by the Gemini API itself."""
+    def __init__(self, message, original_exception=None):
+        super().__init__(message)
+        self.original_exception = original_exception
+
+class GeminiJSONParsingError(GeminiServiceError):
+    """Raised when JSON parsing of API response fails."""
+    def __init__(self, message, raw_text=None):
+        super().__init__(message)
+        self.raw_text = raw_text
+
+class GeminiBlockedPromptError(GeminiServiceError):
+    """Raised when the prompt is blocked by the API."""
+    def __init__(self, message, block_reason=None, block_reason_message=None):
+        super().__init__(message)
+        self.block_reason = block_reason
+        self.block_reason_message = block_reason_message
+
+class GeminiEmptyResponseError(GeminiServiceError):
+    """Raised when the API returns an empty or unexpected response."""
+    pass
+
 
 class GeminiService:
     """
@@ -22,20 +57,23 @@ class GeminiService:
     - 解析和記錄 API 的回應。
     """
 
-    def __init__(self):
+    def __init__(self, model_name: str = 'gemini-pro'):
         """
         初始化 GeminiService。
+
+        Args:
+            model_name (str): 要使用的 Gemini 模型的名稱。
 
         在初始化過程中，服務會嘗試從應用程式設定中讀取 Google API 金鑰，
         並使用該金鑰配置 `google.generativeai` 函式庫。
         服務的 `is_configured` 屬性將反映配置是否成功。
         """
+        self.model_name = model_name
         self.is_configured = False
-        self.model_name = 'gemini-pro' # 預設使用的 Gemini 模型，未來可以考慮使其可配置。
 
         logger.info(
-            "Gemini AI 服務 (GeminiService) 初始化中...",
-            extra={"props": {"service_name": "GeminiService", "initialization_status": "starting"}}
+            f"Gemini AI 服務 (GeminiService) 初始化中 (模型: {self.model_name})...",
+            extra={"props": {"service_name": "GeminiService", "model_name": self.model_name, "initialization_status": "starting"}}
         )
 
         api_key_secret = settings.GOOGLE_API_KEY
@@ -54,6 +92,7 @@ class GeminiService:
                         "GOOGLE_API_KEY 在設定中存在但為空值，GeminiService 功能將受限。",
                         extra={"props": {"service_name": "GeminiService", "configuration_status": "api_key_empty"}}
                     )
+                    # No need to raise GeminiNotConfiguredError here, methods will check self.is_configured
             except Exception as e:
                 logger.error(
                     f"配置 Gemini AI API 金鑰時發生錯誤: {e}", exc_info=True,
@@ -65,8 +104,9 @@ class GeminiService:
                 "未在設定中找到 GOOGLE_API_KEY，GeminiService 功能將受限。",
                 extra={"props": {"service_name": "GeminiService", "configuration_status": "api_key_missing"}}
             )
+            # No need to raise GeminiNotConfiguredError here, methods will check self.is_configured
 
-    async def summarize_text(self, text: str, max_retries: int = 1, retry_delay: int = 5) -> Optional[str]:
+    async def summarize_text(self, text: str, max_retries: int = 1, retry_delay: int = 5) -> str:
         """
         使用 Gemini AI 模型對提供的文字內容進行摘要。
 
@@ -76,24 +116,23 @@ class GeminiService:
             retry_delay (int, optional): 每次重試之間的延遲時間 (秒)。預設為 5。
 
         Returns:
-            Optional[str]: 如果成功，返回摘要後的文字字串。
-                           如果服務未配置、輸入文字為空、API 請求失敗或回應格式不正確，
-                           則返回 None 或包含錯誤訊息的字串。
+            str: 摘要後的文字字串。
+
+        Raises:
+            GeminiNotConfiguredError: 如果服務未配置 API 金鑰。
+            ValueError: 如果輸入文字為空。
+            GeminiBlockedPromptError: 如果提示被 API 阻擋。
+            GeminiEmptyResponseError: 如果 API 回應為空或不符合預期。
+            GeminiAPIError: 如果 API 請求失敗。
         """
         operation_props = {"api_action": "summarize_text", "model_name": self.model_name, "input_length": len(text) if text else 0}
         if not self.is_configured:
-            logger.warning(
-                "GeminiService 未配置 API 金鑰，無法執行摘要。",
-                extra={"props": {**operation_props, "error": "service_not_configured"}}
-            )
-            return "服務未配置或API金鑰無效"
+            logger.warning("GeminiService 未配置 API 金鑰，無法執行摘要。", extra={"props": {**operation_props, "error_type": "GeminiNotConfiguredError"}})
+            raise GeminiNotConfiguredError("GeminiService is not configured with an API key.")
 
         if not text or not text.strip():
-            logger.warning(
-                "輸入文字為空，無法進行摘要。",
-                extra={"props": {**operation_props, "error": "empty_input_text"}}
-            )
-            return "輸入文字為空"
+            logger.warning("輸入文字為空，無法進行摘要。", extra={"props": {**operation_props, "error_type": "ValueError"}})
+            raise ValueError("Input text cannot be empty.")
 
         model = genai.GenerativeModel(self.model_name)
         prompt = f"請將以下文字內容進行摘要，並以中文輸出重點：\n\n---\n{text}\n---"
@@ -108,94 +147,92 @@ class GeminiService:
                 )
                 response = await model.generate_content_async(prompt)
 
-                if response.parts and response.parts[0].text:
-                    summary = response.parts[0].text
-                elif hasattr(response, 'text') and response.text:
+                summary = ""
+                if response.parts:
+                    summary = "".join(part.text for part in response.parts if hasattr(part, 'text') and part.text)
+                elif hasattr(response, 'text') and response.text: # Fallback for simpler responses
                     summary = response.text
-                else:
-                    block_reason = response.prompt_feedback.block_reason if response.prompt_feedback else "Unknown"
-                    block_reason_message = response.prompt_feedback.block_reason_message if response.prompt_feedback else "N/A"
-                    logger.warning(
-                        f"Gemini API 回應中未找到有效的文字內容。阻擋原因: {block_reason}",
-                        extra={"props": {**attempt_props, "api_call_status": "no_content", "block_reason": block_reason, "response": str(response)}}
-                    )
-                    if block_reason != "Unknown": # Check if prompt_feedback exists and has a reason
-                         return f"請求因 {block_reason_message} 被阻擋" # Use the message from feedback
-                    return "無法從回應中提取摘要"
+
+                if not summary: # Check if summary is still empty
+                    if response.prompt_feedback and response.prompt_feedback.block_reason:
+                        logger.warning(
+                            f"Gemini API 請求被阻擋。原因: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}",
+                            extra={"props": {**attempt_props, "api_call_status": "blocked", "block_reason": response.prompt_feedback.block_reason, "response": str(response)}}
+                        )
+                        raise GeminiBlockedPromptError(
+                            f"Prompt was blocked: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}",
+                            block_reason=response.prompt_feedback.block_reason,
+                            block_reason_message=response.prompt_feedback.block_reason_message
+                        )
+                    else:
+                        logger.warning(
+                            "Gemini API 回應中未找到有效的文字內容。",
+                            extra={"props": {**attempt_props, "api_call_status": "no_content", "response": str(response)}}
+                        )
+                        raise GeminiEmptyResponseError("Gemini API returned an empty or unexpected response.")
 
                 logger.info(
                     "成功從 Gemini API 獲取摘要。",
                     extra={"props": {**attempt_props, "api_call_status": "success", "summary_length": len(summary)}}
                 )
                 return summary
+            except (GeminiBlockedPromptError, GeminiEmptyResponseError) as e_gemini_known: # Re-raise known errors
+                if attempt < max_retries:
+                    logger.info(f"將在 {retry_delay} 秒後重試 ({type(e_gemini_known).__name__})...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise # Raise the caught exception if max_retries reached
             except Exception as e:
                 logger.error(
                     f"Gemini API 文字摘要請求失敗 (嘗試 {attempt + 1}/{max_retries + 1}): {e}", exc_info=True,
-                    extra={"props": {**attempt_props, "api_call_status": "exception", "error": str(e)}}
+                    extra={"props": {**attempt_props, "api_call_status": "exception", "error_type": type(e).__name__, "error": str(e)}}
                 )
                 if attempt < max_retries:
                     logger.info(f"將在 {retry_delay} 秒後重試...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
                     await asyncio.sleep(retry_delay)
                 else:
                     logger.error("已達到最大重試次數，文字摘要失敗。", extra={"props": {**attempt_props, "final_status": "max_retries_reached"}})
-                    return f"API請求錯誤：{str(e)}"
+                    raise GeminiAPIError(f"Gemini API request failed after {max_retries + 1} attempts: {str(e)}", original_exception=e)
 
-        logger.error("文字摘要請求最終失敗 (迴圈結束)。", extra={"props": {**operation_props, "final_status": "loop_ended_failure"}})
-        return "文字摘要請求最終失敗" # 或者可以返回 None，讓呼叫者更一致地處理失敗
+        # This part should ideally not be reached if logic is correct (either returns summary or raises error)
+        logger.error("文字摘要請求最終失敗 (迴圈結束異常)。", extra={"props": {**operation_props, "final_status": "loop_ended_failure_unexpected"}})
+        raise GeminiServiceError("Text summarization failed after all retries.")
 
-    async def analyze_report(self, report_content: str, max_retries: int = 1, retry_delay: int = 5) -> Optional[Dict[str, Any]]:
+
+    async def analyze_report(self, prompt_text: str, max_retries: int = 1, retry_delay: int = 5) -> Dict[str, Any]:
         """
-        使用 Gemini AI 模型對提供的報告內容進行結構化分析。
-
-        該方法會指示模型扮演商業分析師的角色，並要求以 JSON 格式返回分析結果，
-        包含 'main_findings', 'potential_risks', 和 'suggested_actions' 三個鍵。
+        使用 Gemini AI 模型對提供的完整提示文字進行分析，並期望返回 JSON。
 
         Args:
-            report_content (str): 需要進行分析的報告原文。
+            prompt_text (str): 包含完整指令和內容的提示文字，期望模型返回 JSON。
             max_retries (int, optional): API 請求失敗時的最大重試次數。預設為 1。
             retry_delay (int, optional): 每次重試之間的延遲時間 (秒)。預設為 5。
 
         Returns:
-            Optional[Dict[str, Any]]: 如果成功，返回一個包含結構化分析結果的字典。
-                                      例如：
-                                      {
-                                          "main_findings": "...",
-                                          "potential_risks": "...",
-                                          "suggested_actions": "..."
-                                      }
-                                      如果服務未配置、輸入內容為空、API 請求失敗、回應非預期 JSON 格式
-                                      或 JSON 解析失敗，則返回包含 "錯誤" 鍵的字典。
-        """
-        operation_props = {"api_action": "analyze_report", "model_name": self.model_name, "input_length": len(report_content) if report_content else 0}
-        if not self.is_configured:
-            logger.warning(
-                "GeminiService 未配置 API 金鑰，無法執行報告分析。",
-                extra={"props": {**operation_props, "error": "service_not_configured"}}
-            )
-            return {"錯誤": "服務未配置或API金鑰無效"}
+            Dict[str, Any]: 包含結構化分析結果的字典。
 
-        if not report_content or not report_content.strip():
-            logger.warning(
-                "報告內容為空，無法進行分析。",
-                 extra={"props": {**operation_props, "error": "empty_input_text"}}
-            )
-            return {"錯誤": "報告內容為空"}
+        Raises:
+            GeminiNotConfiguredError: 如果服務未配置 API 金鑰。
+            ValueError: 如果輸入提示文字為空。
+            GeminiBlockedPromptError: 如果提示被 API 阻擋。
+            GeminiEmptyResponseError: 如果 API 回應為空或不符合預期。
+            GeminiJSONParsingError: 如果 API 回應無法解析為 JSON。
+            GeminiAPIError: 如果 API 請求失敗。
+        """
+        operation_props = {"api_action": "analyze_report", "model_name": self.model_name, "input_length": len(prompt_text) if prompt_text else 0}
+        if not self.is_configured:
+            logger.warning("GeminiService 未配置 API 金鑰，無法執行報告分析。", extra={"props": {**operation_props, "error_type": "GeminiNotConfiguredError"}})
+            raise GeminiNotConfiguredError("GeminiService is not configured with an API key.")
+
+        if not prompt_text or not prompt_text.strip():
+            logger.warning("輸入提示文字為空，無法進行分析。", extra={"props": {**operation_props, "error_type": "ValueError"}})
+            raise ValueError("Input prompt text cannot be empty.")
 
         model = genai.GenerativeModel(self.model_name)
-        prompt = (
-            "請你扮演一個專業的商業分析師。詳細分析以下報告內容，並嚴格以JSON格式返回一個包含以下三個鍵的中文分析結果："
-            "1. 'main_findings' (字串): 總結報告中的主要發現，3-5個重點。"
-            "2. 'potential_risks' (字串): 根據報告內容，識別潛在的風險點，2-4個重點。"
-            "3. 'suggested_actions' (字串): 基於分析，提出具體的建議行動，2-4個重點。"
-            "確保JSON格式正確無誤，所有文字內容都使用中文。"
-            "\n\n報告內容：\n---\n"
-            f"{report_content}"
-            "\n---\n"
-            "JSON輸出："
-        )
-        operation_props["prompt_length"] = len(prompt)
+        # The prompt_text is now the full prompt, no internal construction needed.
+        operation_props["prompt_length"] = len(prompt_text)
 
-        raw_text_for_error_log = "" # Define in outer scope for logging in case of JSON error
+        raw_text_for_error_log = ""
 
         for attempt in range(max_retries + 1):
             attempt_props = {**operation_props, "attempt": attempt + 1, "max_retries": max_retries}
@@ -204,48 +241,61 @@ class GeminiService:
                     f"嘗試向 Gemini API 請求報告分析 (嘗試 {attempt + 1}/{max_retries + 1})...",
                     extra={"props": {**attempt_props, "api_call_status": "started"}}
                 )
-                response = await model.generate_content_async(prompt)
+                response = await model.generate_content_async(prompt_text) # Use prompt_text directly
 
-                if response.parts and response.parts[0].text:
-                    raw_text_for_error_log = response.parts[0].text
+                raw_text_for_error_log = "" # Reset for each attempt
+                if response.parts:
+                    raw_text_for_error_log = "".join(part.text for part in response.parts if hasattr(part, 'text') and part.text)
                 elif hasattr(response, 'text') and response.text:
                     raw_text_for_error_log = response.text
-                else:
-                    block_reason = response.prompt_feedback.block_reason if response.prompt_feedback else "Unknown"
-                    block_reason_message = response.prompt_feedback.block_reason_message if response.prompt_feedback else "N/A"
-                    logger.warning(
-                        f"Gemini API 分析回應中未找到有效的文字內容。阻擋原因: {block_reason}",
-                        extra={"props": {**attempt_props, "api_call_status": "no_content", "block_reason": block_reason, "response": str(response)}}
-                    )
-                    if block_reason != "Unknown":
-                         return {"錯誤": f"請求因 {block_reason_message} 被阻擋"}
-                    return {"錯誤": "無法從API回應中提取分析文字"}
+
+                if not raw_text_for_error_log:
+                    if response.prompt_feedback and response.prompt_feedback.block_reason:
+                        logger.warning(
+                            f"Gemini API 請求被阻擋。原因: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}",
+                            extra={"props": {**attempt_props, "api_call_status": "blocked", "block_reason": response.prompt_feedback.block_reason, "response": str(response)}}
+                        )
+                        raise GeminiBlockedPromptError(
+                            f"Prompt was blocked: {response.prompt_feedback.block_reason_message or response.prompt_feedback.block_reason}",
+                            block_reason=response.prompt_feedback.block_reason,
+                            block_reason_message=response.prompt_feedback.block_reason_message
+                        )
+                    else:
+                        logger.warning(
+                            "Gemini API 分析回應中未找到有效的文字內容。",
+                            extra={"props": {**attempt_props, "api_call_status": "no_content", "response": str(response)}}
+                        )
+                        raise GeminiEmptyResponseError("Gemini API returned an empty or unexpected response for analysis.")
 
                 logger.debug(f"Gemini API 返回的原始分析文字: {raw_text_for_error_log}", extra={"props": {**attempt_props, "raw_response_text": raw_text_for_error_log}})
 
                 json_text = raw_text_for_error_log
+                # Basic extraction of JSON from markdown code blocks if present
                 if "```json" in json_text:
                     json_text = json_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in json_text and not json_text.strip().startswith("{"):
+                elif "```" in json_text and not json_text.strip().startswith("{"): # Handle if only ``` not ```json
                     json_text = json_text.split("```")[1].strip()
-                else:
+                else: # Assume it's plain JSON or needs cleaning
                     json_text = json_text.strip()
 
+                # Further ensure it's a valid JSON object (starts with { ends with })
                 if not json_text.startswith("{") or not json_text.endswith("}"):
                     start_brace = json_text.find("{")
                     end_brace = json_text.rfind("}")
                     if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
                         json_text = json_text[start_brace : end_brace+1]
-                    else:
-                        raise json.JSONDecodeError("回應內容非預期JSON格式", json_text, 0)
+                    else: # If still not a valid structure, parsing will fail, caught by JSONDecodeError
+                        logger.warning(f"Response content does not appear to be a JSON object: {json_text[:100]}...", extra={"props": {**attempt_props, "json_cleaning_issue": True}})
+
 
                 analysis_result = json.loads(json_text)
-                expected_keys = ['main_findings', 'potential_risks', 'suggested_actions']
-                if not all(key in analysis_result for key in expected_keys):
-                    logger.warning(
-                        f"Gemini API 返回的JSON缺少預期鍵值: {analysis_result}",
-                        extra={"props": {**attempt_props, "api_call_status": "json_missing_keys", "analysis_result": analysis_result}}
-                    )
+                # Optional: Basic validation if specific keys are always expected (AnalysisService might do this too)
+                # expected_keys = ['main_findings', 'potential_risks', 'suggested_actions']
+                # if not all(key in analysis_result for key in expected_keys):
+                #     logger.warning(
+                #         f"Gemini API 返回的JSON缺少預期鍵值: {analysis_result}",
+                #         extra={"props": {**attempt_props, "api_call_status": "json_missing_keys", "analysis_result": analysis_result}}
+                #     )
 
                 logger.info(
                     "成功從 Gemini API 獲取並解析報告分析結果。",
@@ -258,22 +308,27 @@ class GeminiService:
                     extra={"props": {**attempt_props, "api_call_status": "json_decode_error", "error": str(e_json), "raw_response_text": raw_text_for_error_log}}
                 )
                 if attempt < max_retries:
-                    logger.info(f"將在 {retry_delay} 秒後重試...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
+                    logger.info(f"將在 {retry_delay} 秒後重試 (JSON解析錯誤)...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
                     await asyncio.sleep(retry_delay)
                 else:
-                    logger.error("已達到最大重試次數，報告分析JSON解析失敗。", extra={"props": {**attempt_props, "final_status": "max_retries_json_fail"}})
-                    return {"錯誤": f"JSON解析錯誤: {str(e_json)}", "原始回應": raw_text_for_error_log}
+                    raise GeminiJSONParsingError(f"Failed to parse Gemini API response as JSON after {max_retries + 1} attempts: {e_json}", raw_text=raw_text_for_error_log)
+            except (GeminiBlockedPromptError, GeminiEmptyResponseError) as e_gemini_known: # Re-raise known errors
+                if attempt < max_retries:
+                    logger.info(f"將在 {retry_delay} 秒後重試 ({type(e_gemini_known).__name__})...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
             except Exception as e:
                 logger.error(
                     f"Gemini API 報告分析請求失敗 (嘗試 {attempt + 1}/{max_retries + 1}): {e}", exc_info=True,
-                    extra={"props": {**attempt_props, "api_call_status": "exception", "error": str(e)}}
+                    extra={"props": {**attempt_props, "api_call_status": "exception", "error_type": type(e).__name__, "error": str(e)}}
                 )
                 if attempt < max_retries:
                     logger.info(f"將在 {retry_delay} 秒後重試...", extra={"props": {**attempt_props, "retry_delay_seconds": retry_delay}})
                     await asyncio.sleep(retry_delay)
                 else:
                     logger.error("已達到最大重試次數，報告分析失敗。", extra={"props": {**attempt_props, "final_status": "max_retries_api_fail"}})
-                    return {"錯誤": f"API請求錯誤: {str(e)}"}
+                    raise GeminiAPIError(f"Gemini API request for analysis failed after {max_retries + 1} attempts: {str(e)}", original_exception=e)
 
-        logger.error("報告分析請求最終失敗 (迴圈結束)。", extra={"props": {**operation_props, "final_status": "loop_ended_failure"}})
-        return {"錯誤": "報告分析請求最終失敗"}
+        logger.error("報告分析請求最終失敗 (迴圈結束異常)。", extra={"props": {**operation_props, "final_status": "loop_ended_failure_unexpected"}})
+        raise GeminiServiceError("Report analysis failed after all retries.")

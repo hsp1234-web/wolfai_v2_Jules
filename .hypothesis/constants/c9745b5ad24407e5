@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/httplib2/auth.py
+# hypothesis_version: 6.135.6
+
+["!#$%&'*+-.^_`|~", '-._~+/', '=', '\\1', '\\\\(.)', 'auth-param-name', 'authentication-info', 'params', 'quoted-string', 'scheme', 'token', 'token68', 'www-authenticate']
