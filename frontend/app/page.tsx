@@ -5,6 +5,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import SettingsCard from '../components/SettingsCard'; // 使用相對路徑導入 SettingsCard 元件
+import DataSelectionForm from '../components/DataSelectionForm'; // Added DataSelectionForm
 import Container from '@mui/material/Container'; // MUI 容器元件，用於限制最大寬度並居中內容
 import ReportTabs from '../components/ReportTabs'; // Adjust path if necessary
 
@@ -69,6 +70,7 @@ export default function HomePage() {
 
         {/* 渲染 SettingsCard 元件 */}
         <SettingsCard />
+        <DataSelectionForm /> {/* Added DataSelectionForm here */}
 
         {/* 生成報告按鈕 */}
         <Button
