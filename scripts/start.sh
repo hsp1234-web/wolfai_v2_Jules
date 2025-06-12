@@ -41,6 +41,8 @@ else
   echo "✅ 端口 $FRONTEND_PORT 可用。"
 fi
 
+echo "INFO: 正在嘗試釋放端口 $FRONTEND_PORT (如果被佔用)..."
+fuser -k 3000/tcp || true
 echo "INFO: 正在背景啟動 Next.js 開發伺服器 (端口 $FRONTEND_PORT)..."
 nohup npm run dev 2>&1 | log_with_timestamp > ../frontend_server.log &
 FRONTEND_PID=$!
