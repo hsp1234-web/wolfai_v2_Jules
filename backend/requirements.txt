@@ -13,4 +13,3 @@ pytest-mock
 httpx
 flake8
 pydantic-settings
-requests
