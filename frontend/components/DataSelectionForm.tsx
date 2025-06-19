@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // Import useEffect
 import Typography from '@mui/material/Typography';
 import Paper from '@mui/material/Paper';
 import Chip from '@mui/material/Chip';
@@ -13,7 +13,11 @@ const dimensions = [
   { key: 'experts', label: '高手觀點資料庫' },
 ];
 
-const DataSelectionForm = () => {
+interface DataSelectionFormProps {
+  onSelectionChange: (selectedDimensions: string[]) => void;
+}
+
+const DataSelectionForm = ({ onSelectionChange }: DataSelectionFormProps) => {
   const [selectedChips, setSelectedChips] = useState<string[]>([]);
 
   const handleChipClick = (chipKey: string) => {
@@ -23,6 +27,11 @@ const DataSelectionForm = () => {
         : [...prevSelected, chipKey]
     );
   };
+
+  // Add useEffect to call onSelectionChange when selectedChips changes
+  useEffect(() => {
+    onSelectionChange(selectedChips);
+  }, [selectedChips, onSelectionChange]);
 
   return (
     <Paper elevation={3} sx={{ p: 2, mt: 2 }}>

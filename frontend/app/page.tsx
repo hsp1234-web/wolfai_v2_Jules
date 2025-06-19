@@ -13,6 +13,11 @@ import ReportTabs from '../components/ReportTabs'; // Adjust path if necessary
 export default function HomePage() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedDataDimensions, setSelectedDataDimensions] = useState<string[]>([]);
+
+  const handleDataSelectionChange = (dimensions: string[]) => {
+    setSelectedDataDimensions(dimensions);
+  };
 
   const handleGenerateReport = async () => {
     setLoading(true);
@@ -21,12 +26,10 @@ export default function HomePage() {
       const apiUrl = `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/reports/generate`;
       const response = await fetch(apiUrl, {
         method: 'POST',
-        // Add headers if required by the API, e.g., Content-Type
-        // headers: {
-        //   'Content-Type': 'application/json',
-        // },
-        // Add body if required by the API
-        // body: JSON.stringify({ /* your payload here */ }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ data_dimensions: selectedDataDimensions }), // Send selected dimensions
       });
 
       if (response.ok) {
@@ -70,7 +73,7 @@ export default function HomePage() {
 
         {/* 渲染 SettingsCard 元件 */}
         <SettingsCard />
-        <DataSelectionForm /> {/* Added DataSelectionForm here */}
+        <DataSelectionForm onSelectionChange={handleDataSelectionChange} /> {/* Added DataSelectionForm here */}
 
         {/* 生成報告按鈕 */}
         <Button
